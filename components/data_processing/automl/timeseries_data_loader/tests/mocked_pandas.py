@@ -19,21 +19,27 @@ class MockSeries:
     """Column vector with ``map``, ``isna``, boolean ``~``, and ``sum`` (count of True)."""
 
     def __init__(self, values):
+        """Store cell values as a list."""
         self._values = list(values)
 
     def map(self, fn):
+        """Apply ``fn`` to each value; return a new ``MockSeries``."""
         return MockSeries([fn(v) for v in self._values])
 
     def isna(self):
+        """Return boolean ``MockSeries`` aligned with ``pandas.Series.isna()``."""
         return MockSeries([_cell_is_na(v) for v in self._values])
 
     def __invert__(self):
+        """Boolean negation element-wise (for ``~mask``)."""
         return MockSeries([not bool(x) for x in self._values])
 
     def sum(self):
+        """Count values that are truthy (used for boolean masks)."""
         return sum(1 for x in self._values if x)
 
     def any(self):
+        """Return whether any value is truthy."""
         return any(self._values)
 
 

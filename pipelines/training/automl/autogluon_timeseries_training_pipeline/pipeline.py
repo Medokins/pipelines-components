@@ -60,7 +60,7 @@ def autogluon_timeseries_training_pipeline(
     Pipeline stages:
 
     1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MB),
-       replaces ``±inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps
+       replaces ``+/-inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps
        and non-null ids, deduplicates ``(id_column, timestamp_column)``, then applies a two-stage
        **per-series temporal** split on ``id_column`` / ``timestamp_column``:
        default **80/20** train vs test per series, then **30/70** of each series' train rows into

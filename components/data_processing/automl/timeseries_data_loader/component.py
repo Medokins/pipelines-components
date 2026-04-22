@@ -27,7 +27,7 @@ def timeseries_data_loader(
     """Load and split timeseries data from S3 for AutoGluon training.
 
     This component loads time series data from S3, samples it (up to 100 MB),
-    applies light **cleansing** (replace ``±inf`` with NaN so AutoGluon can apply its
+    applies light **cleansing** (replace ``+/-inf`` with NaN so AutoGluon can apply its
     own missing-value logic; require parseable timestamps and non-null ids; drop
     exact duplicate ``(id_column, timestamp_column)`` rows, keep last), then performs a two-stage
     **per-series temporal** split for efficient AutoGluon training:
@@ -181,11 +181,11 @@ def timeseries_data_loader(
         """Prepare panel data without dropping rows for missing targets (AutoGluon handles NaNs).
 
         Per time-series practice, **do not** drop rows for null/NaN targets or non-finite values
-        after ``±inf``→NaN: removing observations creates irregular grids and breaks frequency
+        after mapping ``+/-inf`` to NaN: removing observations creates irregular grids and breaks frequency
         inference unless callers set ``freq`` explicitly. See AutoGluon TimeSeries missing-value
         handling per model family.
 
-        This step: replace ``±inf`` with NaN; parse timestamps and **fail** if any are invalid;
+        This step: replace ``+/-inf`` with NaN; parse timestamps and **fail** if any are invalid;
         **fail** if any ``id_col`` or timestamp is null; ``drop_duplicates`` on ``(id_col, ts_col)``
         (keep last) only for true duplicate keys.
         """
