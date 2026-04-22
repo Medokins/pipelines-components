@@ -44,16 +44,23 @@ def _parse_csv_cell(cell):
 
 
 def _to_datetime_scalar(val, errors="coerce"):
-    """Return a sortable date string for YYYY-MM-DD, else None when errors='coerce'."""
+    """Return a sortable value: ISO date strings, or numeric timestamps (e.g. fractional year)."""
     if val is None:
         return None
     if isinstance(val, float) and math.isnan(val):
         return None
+    if isinstance(val, (int, float)):
+        return float(val)
     if not isinstance(val, str):
         return val
     s = val.strip()
     if _DATE_PREFIX.match(s):
         return s[:10] if len(s) >= 10 else s
+    # Numeric timestamps (e.g. 1949.083333) — sort chronologically as floats, like many CSV panels.
+    try:
+        return float(s)
+    except ValueError:
+        pass
     if errors == "raise":
         raise ValueError(f"cannot parse datetime from {val!r}")
     return None

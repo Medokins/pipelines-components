@@ -8,8 +8,10 @@ import csv
 import io
 import json
 import os
+import random
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -88,6 +90,45 @@ def _timeseries_csv(n_rows=10):
     for i in range(n_rows):
         lines.append(f"series-1,2024-01-{i + 1:02d},{i},{i * 10}")
     return "\n".join(lines) + "\n"
+
+
+def _shuffled_timeseries_csv(n_rows=10, seed=42):
+    """Same rows as ``_timeseries_csv`` but data lines in pseudo-random order (header first)."""
+    lines = ["item_id,timestamp,target,feature"]
+    data = [f"series-1,2024-01-{i + 1:02d},{i},{i * 10}" for i in range(n_rows)]
+    rng = random.Random(seed)
+    rng.shuffle(data)
+    lines.extend(data)
+    return "\n".join(lines) + "\n"
+
+
+def _run_loader(tmp_path, csv_body, selection_train_size=0.3):
+    """Execute ``python_func`` with mocked S3/pandas; return paths and ``sample_config``."""
+    sampled_test = _make_test_artifact(tmp_path)
+    with _mock_boto3_and_pandas(get_object_return={"Body": io.BytesIO(csv_body.encode("utf-8"))}):
+        result = timeseries_data_loader.python_func(
+            file_key="ts.csv",
+            bucket_name="b",
+            workspace_path=str(tmp_path),
+            target="target",
+            id_column="item_id",
+            timestamp_column="timestamp",
+            sampled_test_dataset=sampled_test,
+            selection_train_size=selection_train_size,
+        )
+    return result, sampled_test
+
+
+def _multiset_observations(selection_path, extra_path, test_path):
+    """Stable sort of (id, timestamp, target) across all written splits."""
+    rows = []
+    for p in (selection_path, extra_path, test_path):
+        rows.extend(_read_csv_rows(p))
+    return sorted((r["item_id"], str(r["timestamp"]), r["target"]) for r in rows)
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+MINIMAL_PANEL_CSV = FIXTURE_DIR / "minimal_panel.csv"
 
 
 class TestTimeseriesDataLoaderUnitTests:
@@ -526,3 +567,138 @@ class TestTimeseriesDataLoaderUnitTests:
             all_targets.extend(r["target"] for r in _read_csv_rows(path))
         assert "inf" not in all_targets
         assert "nan" not in "".join(all_targets).lower()
+
+
+class TestTimeseriesDataLoaderScenarioMatrix:
+    """Scenario tests inspired by fixture-driven and ordering-invariant patterns."""
+
+    @staticmethod
+    def _two_series_sorted_csv():
+        lines = ["item_id,timestamp,target,feature"]
+        for sid, base in (("X", 0), ("Y", 100)):
+            for i in range(10):
+                lines.append(f"{sid},2024-01-{i + 1:02d},{base + i},{i}")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _two_series_shuffled_csv(seed=7):
+        lines = ["item_id,timestamp,target,feature"]
+        rows = []
+        for idx, (sid, base) in enumerate((("X", 0), ("Y", 100))):
+            order = list(range(10))
+            rng = random.Random(seed + idx * 31)
+            rng.shuffle(order)
+            for i in order:
+                rows.append(f"{sid},2024-01-{i + 1:02d},{base + i},{i}")
+        rng2 = random.Random(seed + 99)
+        rng2.shuffle(rows)
+        lines.extend(rows)
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _fractional_year_csv(n_rows=10):
+        """Numeric timestamps (fractional year), monotonic in file order."""
+        lines = ["item_id,timestamp,target,feature"]
+        for i in range(n_rows):
+            t = 1949.0 + (i / 12.0)
+            lines.append(f"S,{t},{i * 10},{i}")
+        return "\n".join(lines) + "\n"
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_unsorted_rows_same_multiset_as_chronological_file(self, tmp_path_factory):
+        """Shuffled row order yields the same observations per split as pre-sorted CSV."""
+        d_sorted = tmp_path_factory.mktemp("sorted")
+        d_shuf = tmp_path_factory.mktemp("shuffled")
+        res_s, st_s = _run_loader(d_sorted, _timeseries_csv(10))
+        res_h, st_h = _run_loader(d_shuf, _shuffled_timeseries_csv(10, seed=123))
+        m_s = _multiset_observations(
+            res_s.models_selection_train_data_path, res_s.extra_train_data_path, st_s.path
+        )
+        m_h = _multiset_observations(
+            res_h.models_selection_train_data_path, res_h.extra_train_data_path, st_h.path
+        )
+        assert m_s == m_h
+        test_s = sorted((r["timestamp"], r["target"]) for r in _read_csv_rows(st_s.path))
+        test_h = sorted((r["timestamp"], r["target"]) for r in _read_csv_rows(st_h.path))
+        assert test_s == test_h
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_two_series_interleaved_matches_sorted_multiset(self, tmp_path_factory):
+        """Panel data with permuted row order matches sorted canonical multiset."""
+        d1 = tmp_path_factory.mktemp("canon")
+        d2 = tmp_path_factory.mktemp("mixed")
+        res_a, st_a = _run_loader(d1, self._two_series_sorted_csv())
+        res_b, st_b = _run_loader(d2, self._two_series_shuffled_csv())
+        assert _multiset_observations(
+            res_a.models_selection_train_data_path, res_a.extra_train_data_path, st_a.path
+        ) == _multiset_observations(
+            res_b.models_selection_train_data_path, res_b.extra_train_data_path, st_b.path
+        )
+
+    @pytest.mark.parametrize(
+        "n_rows,selection_train_size,expect_selection,expect_extra,expect_test",
+        [
+            (10, 0.3, 2, 6, 2),
+            (5, 0.3, 1, 3, 1),
+            (20, 0.5, 8, 8, 4),
+            (3, 0.3, 1, 1, 1),
+        ],
+        ids=["n10-default", "n5-default", "n20-sel05", "n3-edge"],
+    )
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_split_output_sizes_parametrize(
+        self,
+        tmp_path,
+        n_rows,
+        selection_train_size,
+        expect_selection,
+        expect_extra,
+        expect_test,
+    ):
+        """JSON-style matrix: (rows, selection_train_size) → expected split sizes."""
+        result, sampled = _run_loader(tmp_path, _timeseries_csv(n_rows), selection_train_size)
+        assert len(_read_csv_rows(result.models_selection_train_data_path)) == expect_selection
+        assert len(_read_csv_rows(result.extra_train_data_path)) == expect_extra
+        assert len(_read_csv_rows(sampled.path)) == expect_test
+        assert result.sample_config["total_rows_loaded"] == n_rows
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_numeric_fractional_year_timestamps_split_by_order(self, tmp_path):
+        """Non-ISO numeric time axis (fractional year) sorts and splits chronologically."""
+        result, sampled = _run_loader(tmp_path, self._fractional_year_csv(10))
+        assert result.sample_config["total_rows_loaded"] == 10
+        test_rows = _read_csv_rows(sampled.path)
+        assert len(test_rows) == 2
+        # Latest two observations by time should land in test for default 20% per-series split.
+        targets = sorted(int(r["target"]) for r in test_rows)
+        assert targets == [80, 90]
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_fixture_minimal_panel_matches_inline_generator(self, tmp_path):
+        """Committed ``fixtures/minimal_panel.csv`` drives the same outcome as ``_timeseries_csv(10)``."""
+        assert MINIMAL_PANEL_CSV.is_file()
+        body = MINIMAL_PANEL_CSV.read_text(encoding="utf-8")
+        res_fix, st_fix = _run_loader(tmp_path / "fx", body)
+        res_inl, st_inl = _run_loader(tmp_path / "in", _timeseries_csv(10))
+        assert _multiset_observations(
+            res_fix.models_selection_train_data_path, res_fix.extra_train_data_path, st_fix.path
+        ) == _multiset_observations(
+            res_inl.models_selection_train_data_path, res_inl.extra_train_data_path, st_inl.path
+        )
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_all_rows_invalid_timestamp_raises_after_cleansing(self, tmp_path):
+        """If every row loses a valid timestamp, cleansing raises before split."""
+        body = "item_id,timestamp,target,feature\na,not-a-date,0,x\nb,bad-ts,1,y\n"
+        sampled_test = _make_test_artifact(tmp_path)
+        with _mock_boto3_and_pandas(get_object_return={"Body": io.BytesIO(body.encode("utf-8"))}):
+            with pytest.raises(ValueError, match="After cleansing"):
+                timeseries_data_loader.python_func(
+                    file_key="ts.csv",
+                    bucket_name="b",
+                    workspace_path=str(tmp_path),
+                    target="target",
+                    id_column="item_id",
+                    timestamp_column="timestamp",
+                    sampled_test_dataset=sampled_test,
+                )
