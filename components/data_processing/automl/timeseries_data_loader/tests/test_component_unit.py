@@ -127,8 +127,8 @@ def _multiset_observations(selection_path, extra_path, test_path):
     return sorted((r["item_id"], str(r["timestamp"]), r["target"]) for r in rows)
 
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
-MINIMAL_PANEL_CSV = FIXTURE_DIR / "minimal_panel.csv"
+TEST_DATA_DIR = Path(__file__).resolve().parent / "data"
+MINIMAL_PANEL_CSV = TEST_DATA_DIR / "minimal_panel.csv"
 
 
 class TestTimeseriesDataLoaderUnitTests:
@@ -666,7 +666,7 @@ class TestTimeseriesDataLoaderScenarioMatrix:
 
     @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
     def test_fixture_minimal_panel_matches_inline_generator(self, tmp_path):
-        """Committed ``fixtures/minimal_panel.csv`` drives the same outcome as ``_timeseries_csv(10)``."""
+        """Committed ``tests/data/minimal_panel.csv`` drives the same outcome as ``_timeseries_csv(10)``."""
         assert MINIMAL_PANEL_CSV.is_file()
         body = MINIMAL_PANEL_CSV.read_text(encoding="utf-8")
         res_fix, st_fix = _run_loader(tmp_path / "fx", body)

@@ -388,7 +388,3 @@ tensorboard/
 # Exception: test data CSVs under tests/data/
 !**/tests/data/
 !**/tests/data/*.csv
-
-# Exception: small tracked fixture CSVs under tests/fixtures/ (e.g. timeseries loader tests)
-!**/tests/fixtures/
-!**/tests/fixtures/*.csv
