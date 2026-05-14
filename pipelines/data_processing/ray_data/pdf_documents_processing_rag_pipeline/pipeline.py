@@ -284,7 +284,7 @@ def rag_multistep_pipeline(
     kubernetes.mount_pvc(
         download_task,
         pvc_name=model_cache_pvc,
-        mount_path=model_cache_mount,
+        mount_path="/mnt/models",
     )
     kubernetes.use_secret_as_env(
         download_task,
