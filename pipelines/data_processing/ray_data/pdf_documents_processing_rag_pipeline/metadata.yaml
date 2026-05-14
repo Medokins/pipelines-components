@@ -1,9 +1,10 @@
 ---
 name: pdf_documents_processing_rag
 description: >
-  Multi-step RAG pipeline that parses and chunks PDF documents using
-  Docling via RayJob, ingests embeddings into Milvus, and deploys
-  an LLM for inference using vLLM on OpenShift AI.
+  Multi-step RAG pipeline: parse and chunk PDFs via Docling RayJob,
+  ingest embeddings into Milvus, deploy LLM with vLLM on OpenShift AI.
+  Requires secrets: hf-token-secret (key: token) and
+  minio-secret (keys: access_key, secret_key).
 stability: experimental
 dependencies:
   kubeflow:

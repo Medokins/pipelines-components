@@ -69,11 +69,20 @@ def rag_multistep_pipeline(
     embedding_model: str = "ibm-granite/granite-embedding-125m-english",
     embedding_dim: int = 768,
     embedding_runtime_image: str = _DEFAULT_EMBEDDING_RUNTIME_IMAGE,
+    embedding_serving_runtime_name: str = "embedding-runtime",
     embedding_gpu_count: int = 1,
+    embedding_min_replicas: int = 1,
+    embedding_max_replicas: int = 1,
+    embedding_cpu_requests: str = "2",
+    embedding_cpu_limits: str = "4",
+    embedding_memory_requests: str = "4Gi",
+    embedding_memory_limits: str = "8Gi",
+    embedding_max_model_len: int = 512,
     # Milvus
     milvus_host: str = "milvus-milvus.milvus.svc.cluster.local",
     milvus_port: int = 19530,
     milvus_db: str = "default",
+    milvus_token: str = "",
     collection_name: str = "rag_documents",
     drop_existing: bool = True,
     embed_batch_size: int = 64,
@@ -82,8 +91,17 @@ def rag_multistep_pipeline(
     hf_secret_name: str = "hf-token-secret",
     llm_model_name: str = "mistralai/Mistral-7B-Instruct-v0.3",
     model_cache_pvc: str = "model-cache-pvc",
+    model_cache_mount: str = "/mnt/models",
     max_model_len: int = 4096,
     gpu_count: int = 1,
+    llm_hardware_profile_name: str = "gpu-profile",
+    llm_hardware_profile_namespace: str = "redhat-ods-applications",
+    llm_min_replicas: int = 1,
+    llm_max_replicas: int = 1,
+    llm_cpu_requests: str = "2",
+    llm_cpu_limits: str = "2",
+    llm_memory_requests: str = "8Gi",
+    llm_memory_limits: str = "8Gi",
 ):
     """Multi-step RAG pipeline: parse PDFs, ingest into Milvus, deploy LLM.
 
@@ -117,10 +135,19 @@ def rag_multistep_pipeline(
         embedding_model: Embedding model name.
         embedding_dim: Embedding vector dimension.
         embedding_runtime_image: Container image for the embedding server.
+        embedding_serving_runtime_name: Name of the embedding ServingRuntime CR.
         embedding_gpu_count: GPUs for the embedding service.
+        embedding_min_replicas: Minimum replicas for the embedding service.
+        embedding_max_replicas: Maximum replicas for the embedding service.
+        embedding_cpu_requests: CPU requests for the embedding service.
+        embedding_cpu_limits: CPU limits for the embedding service.
+        embedding_memory_requests: Memory requests for the embedding service.
+        embedding_memory_limits: Memory limits for the embedding service.
+        embedding_max_model_len: Maximum sequence length for the embedding model.
         milvus_host: Milvus service hostname.
         milvus_port: Milvus gRPC port.
         milvus_db: Milvus database name.
+        milvus_token: Milvus authentication token. Empty string for unauthenticated connections.
         collection_name: Milvus collection name.
         drop_existing: If True, drop and recreate the Milvus collection. If False, append.
         embed_batch_size: Batch size for embedding requests.
@@ -128,8 +155,17 @@ def rag_multistep_pipeline(
         llm_model_name: HuggingFace LLM model ID for inference.
         hf_secret_name: Kubernetes Secret with HuggingFace token (key: 'token').
         model_cache_pvc: PVC for cached model weights.
+        model_cache_mount: Mount path for the model cache PVC.
         max_model_len: Maximum context length for the LLM.
         gpu_count: GPUs for LLM serving.
+        llm_hardware_profile_name: Hardware profile name for LLM deployment.
+        llm_hardware_profile_namespace: Namespace of the hardware profile.
+        llm_min_replicas: Minimum replicas for the LLM service.
+        llm_max_replicas: Maximum replicas for the LLM service.
+        llm_cpu_requests: CPU requests for the LLM service.
+        llm_cpu_limits: CPU limits for the LLM service.
+        llm_memory_requests: Memory requests for the LLM service.
+        llm_memory_limits: Memory limits for the LLM service.
     """
     # Step 1: Parse & chunk PDFs -> S3
     chunk_task = parse_and_chunk(
@@ -170,8 +206,16 @@ def rag_multistep_pipeline(
         embed_deploy_task = deploy_embedding_model(
             model_name=embedding_model,
             namespace=namespace,
+            serving_runtime_name=embedding_serving_runtime_name,
             runtime_image=embedding_runtime_image,
+            min_replicas=embedding_min_replicas,
+            max_replicas=embedding_max_replicas,
+            cpu_requests=embedding_cpu_requests,
+            cpu_limits=embedding_cpu_limits,
+            memory_requests=embedding_memory_requests,
+            memory_limits=embedding_memory_limits,
             gpu_count=embedding_gpu_count,
+            max_model_len=embedding_max_model_len,
         )
         embed_deploy_task.after(chunk_task)
         embed_deploy_task.set_caching_options(False)
@@ -183,6 +227,7 @@ def rag_multistep_pipeline(
             milvus_host=milvus_host,
             milvus_port=milvus_port,
             milvus_db=milvus_db,
+            milvus_token=milvus_token,
             collection_name=collection_name,
             drop_existing=drop_existing,
             embedding_endpoint=embed_deploy_task.output,
@@ -209,6 +254,7 @@ def rag_multistep_pipeline(
             milvus_host=milvus_host,
             milvus_port=milvus_port,
             milvus_db=milvus_db,
+            milvus_token=milvus_token,
             collection_name=collection_name,
             drop_existing=drop_existing,
             embedding_endpoint=embedding_endpoint,
@@ -232,12 +278,13 @@ def rag_multistep_pipeline(
     download_task = download_model(
         model_name=llm_model_name,
         model_cache_pvc=model_cache_pvc,
+        model_cache_mount=model_cache_mount,
     )
     download_task.set_caching_options(False)
     kubernetes.mount_pvc(
         download_task,
         pvc_name=model_cache_pvc,
-        mount_path="/mnt/models",
+        mount_path=model_cache_mount,
     )
     kubernetes.use_secret_as_env(
         download_task,
@@ -251,8 +298,16 @@ def rag_multistep_pipeline(
         namespace=namespace,
         model_dir=download_task.output,
         model_cache_pvc=model_cache_pvc,
-        max_model_len=max_model_len,
+        hardware_profile_name=llm_hardware_profile_name,
+        hardware_profile_namespace=llm_hardware_profile_namespace,
+        min_replicas=llm_min_replicas,
+        max_replicas=llm_max_replicas,
         gpu_count=gpu_count,
+        max_model_len=max_model_len,
+        cpu_requests=llm_cpu_requests,
+        memory_requests=llm_memory_requests,
+        cpu_limits=llm_cpu_limits,
+        memory_limits=llm_memory_limits,
     )
     deploy_task.set_caching_options(False)
     # No dependency on ingest_task — model deployment runs in parallel

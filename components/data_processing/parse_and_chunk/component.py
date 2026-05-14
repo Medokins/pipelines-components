@@ -77,7 +77,6 @@ def parse_and_chunk(
         The S3 URI where JSONL chunk files were written.
     """
     import base64
-    import os
     import textwrap
     import time
 

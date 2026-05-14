@@ -27,6 +27,7 @@ def ingest_to_milvus(
     embedding_dim: int = 768,
     milvus_port: int = 19530,
     milvus_db: str = "default",
+    milvus_token: str = "",
     collection_name: str = "rag_documents",
     drop_existing: bool = True,
     embed_batch_size: int = 64,
@@ -45,6 +46,7 @@ def ingest_to_milvus(
         embedding_dim: Dimension of the embedding vectors.
         milvus_port: Milvus gRPC port.
         milvus_db: Milvus database name.
+        milvus_token: Milvus authentication token. Empty string for unauthenticated connections.
         collection_name: Milvus collection name.
         drop_existing: If True, drop and recreate the collection. If False, append to it.
         embed_batch_size: Batch size for embedding requests.
@@ -92,7 +94,10 @@ def ingest_to_milvus(
 
     # --- Setup Milvus collection ---
     uri = f"http://{milvus_host}:{milvus_port}"
-    client = MilvusClient(uri=uri, db_name=milvus_db)
+    milvus_kwargs = {"uri": uri, "db_name": milvus_db}
+    if milvus_token:
+        milvus_kwargs["token"] = milvus_token
+    client = MilvusClient(**milvus_kwargs)
 
     collection_exists = client.has_collection(collection_name)
 

@@ -39,34 +39,42 @@ Multi-step RAG pipeline: parse PDFs, ingest into Milvus, deploy LLM.
 | `embedding_model` | `str` | `ibm-granite/granite-embedding-125m-english` | Embedding model name. |
 | `embedding_dim` | `int` | `768` | Embedding vector dimension. |
 | `embedding_runtime_image` | `str` | `_DEFAULT_EMBEDDING_RUNTIME_IMAGE` | Container image for the embedding server. |
+| `embedding_serving_runtime_name` | `str` | `embedding-runtime` | Name of the embedding ServingRuntime CR. |
 | `embedding_gpu_count` | `int` | `1` | GPUs for the embedding service. |
+| `embedding_min_replicas` | `int` | `1` | Minimum replicas for the embedding service. |
+| `embedding_max_replicas` | `int` | `1` | Maximum replicas for the embedding service. |
+| `embedding_cpu_requests` | `str` | `2` | CPU requests for the embedding service. |
+| `embedding_cpu_limits` | `str` | `4` | CPU limits for the embedding service. |
+| `embedding_memory_requests` | `str` | `4Gi` | Memory requests for the embedding service. |
+| `embedding_memory_limits` | `str` | `8Gi` | Memory limits for the embedding service. |
+| `embedding_max_model_len` | `int` | `512` | Maximum sequence length for the embedding model. |
 | `milvus_host` | `str` | `milvus-milvus.milvus.svc.cluster.local` | Milvus service hostname. |
 | `milvus_port` | `int` | `19530` | Milvus gRPC port. |
 | `milvus_db` | `str` | `default` | Milvus database name. |
+| `milvus_token` | `str` | `""` | Milvus authentication token. Empty string for unauthenticated connections. |
 | `collection_name` | `str` | `rag_documents` | Milvus collection name. |
 | `drop_existing` | `bool` | `True` | If True, drop and recreate the Milvus collection. If False, append. |
 | `embed_batch_size` | `int` | `64` | Batch size for embedding requests. |
 | `milvus_batch_size` | `int` | `256` | Batch size for Milvus inserts. |
-| `hf_secret_name` | `str` | `hf-token-secret` | Kubernetes Secret with HuggingFace token (key: `token`). Required for gated models. |
+| `hf_secret_name` | `str` | `hf-token-secret` | Kubernetes Secret with HuggingFace token (key: 'token'). |
 | `llm_model_name` | `str` | `mistralai/Mistral-7B-Instruct-v0.3` | HuggingFace LLM model ID for inference. |
 | `model_cache_pvc` | `str` | `model-cache-pvc` | PVC for cached model weights. |
+| `model_cache_mount` | `str` | `/mnt/models` | Mount path for the model cache PVC. |
 | `max_model_len` | `int` | `4096` | Maximum context length for the LLM. |
 | `gpu_count` | `int` | `1` | GPUs for LLM serving. |
-
-## Prerequisites
-
-The default LLM (`mistralai/Mistral-7B-Instruct-v0.3`) is a gated model on HuggingFace. Before running the pipeline, create a Kubernetes Secret with your HuggingFace token:
-
-```bash
-oc create secret generic hf-token-secret --from-literal=token=hf_xxxxx
-```
-
-The secret name must match the `hf_secret_name` pipeline parameter (default: `hf-token-secret`), and the key must be `token`.
+| `llm_hardware_profile_name` | `str` | `gpu-profile` | Hardware profile name for LLM deployment. |
+| `llm_hardware_profile_namespace` | `str` | `redhat-ods-applications` | Namespace of the hardware profile. |
+| `llm_min_replicas` | `int` | `1` | Minimum replicas for the LLM service. |
+| `llm_max_replicas` | `int` | `1` | Maximum replicas for the LLM service. |
+| `llm_cpu_requests` | `str` | `2` | CPU requests for the LLM service. |
+| `llm_cpu_limits` | `str` | `2` | CPU limits for the LLM service. |
+| `llm_memory_requests` | `str` | `8Gi` | Memory requests for the LLM service. |
+| `llm_memory_limits` | `str` | `8Gi` | Memory limits for the LLM service. |
 
 ## Metadata 🗂️
 
 - **Name**: pdf_documents_processing_rag
-- **Description**: Multi-step RAG pipeline that parses and chunks PDF documents using Docling via RayJob, ingests embeddings into Milvus, and deploys an LLM for inference using vLLM on OpenShift AI.
+- **Description**: Multi-step RAG pipeline: parse and chunk PDFs via Docling RayJob, ingest embeddings into Milvus, deploy LLM with vLLM on OpenShift AI. Requires secrets: hf-token-secret (key: token) and minio-secret (keys: access_key, secret_key).
 
 - **Stability**: experimental
 - **Dependencies**:

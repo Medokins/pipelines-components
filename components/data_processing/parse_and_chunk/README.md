@@ -18,6 +18,7 @@ Parse PDFs and write chunked JSONL files to S3.
 | `s3_endpoint` | `str` | `None` | S3-compatible endpoint URL (e.g. MinIO). |
 | `s3_bucket` | `str` | `None` | S3 bucket for output chunks. |
 | `s3_prefix` | `str` | `chunks` | Key prefix for chunk files in S3. |
+| `s3_secret_name` | `str` | `minio-secret` | Kubernetes Secret with S3 credentials (keys: access_key, secret_key). |
 | `tokenizer` | `str` | `sentence-transformers/all-MiniLM-L6-v2` | Tokenizer for HybridChunker (usually the embedding model name). |
 | `chunk_max_tokens` | `int` | `256` | Max tokens per chunk (HybridChunker). |
 | `num_workers` | `int` | `2` | Number of Ray worker pods. |
@@ -33,7 +34,7 @@ Parse PDFs and write chunked JSONL files to S3.
 | `timeout_seconds` | `int` | `600` | Per-file processing timeout. |
 | `enable_profiling` | `bool` | `False` | Enable cProfile profiling (outputs profile stats). |
 | `verbose` | `bool` | `True` | Enable verbose logging for debugging. |
-| `bypass_kueue` | `bool` | `False` | If True, bypass Kueue quota management for the RayJob. |
+| `bypass_kueue` | `bool` | `False` | If True, remove the Kueue queue-name label and manually unsuspend the RayJob, bypassing cluster quota management. Only use on clusters without Kueue or with sufficient free resources. |
 
 ## Outputs 📤
 

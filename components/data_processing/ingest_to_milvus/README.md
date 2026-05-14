@@ -19,6 +19,7 @@ Read chunks from S3, embed, and insert into Milvus.
 | `embedding_dim` | `int` | `768` | Dimension of the embedding vectors. |
 | `milvus_port` | `int` | `19530` | Milvus gRPC port. |
 | `milvus_db` | `str` | `default` | Milvus database name. |
+| `milvus_token` | `str` | `""` | Milvus authentication token. Empty string for unauthenticated connections. |
 | `collection_name` | `str` | `rag_documents` | Milvus collection name. |
 | `drop_existing` | `bool` | `True` | If True, drop and recreate the collection. If False, append to it. |
 | `embed_batch_size` | `int` | `64` | Batch size for embedding requests. |
