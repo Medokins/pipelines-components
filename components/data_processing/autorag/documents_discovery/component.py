@@ -106,7 +106,8 @@ def documents_discovery(
 
     test_data_docs_names = get_test_data_docs_names()
     if test_data_docs_names:
-        supported_files.sort(key=lambda c: Path(c["Key"]).name not in test_data_docs_names)
+        test_keys_set = {c["Key"] for c in supported_files if Path(c["Key"]).name in test_data_docs_names}
+        supported_files.sort(key=lambda c: c["Key"] not in test_keys_set)
 
     total_size = 0
     selected = []

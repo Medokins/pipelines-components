@@ -472,9 +472,9 @@ class TestTextExtractionMultiFormatUnitTests:
         assert len(converter_calls) == 0
 
         output_dir = Path(extracted_text_artifact.path)
-        output_files = list(output_dir.glob("*.txt"))
+        output_files = list(output_dir.glob("*.md"))
         assert len(output_files) == 1
-        assert output_files[0].name == "file1.txt"
+        assert output_files[0].name == "file1.txt.md"
         assert output_files[0].read_text() == "This is a text file content"
 
 
@@ -581,15 +581,12 @@ class TestMultiFormatProcessing:
             )
 
         output_dir = Path(extracted_text_artifact.path)
+        output_files = list(output_dir.glob("*.md"))
+        assert len(output_files) == 1, f"Expected 1 output file for {file_name}, found {len(output_files)}"
+        assert output_files[0].name == f"{file_name}.md"
         if file_extension == ".txt":
-            output_files = list(output_dir.glob("*.txt"))
-            assert len(output_files) == 1, f"Expected 1 output file for {file_name}, found {len(output_files)}"
-            assert output_files[0].name == file_name
             mock_docling_components["converter_instance"].convert.assert_not_called()
         else:
-            output_files = list(output_dir.glob("*.md"))
-            assert len(output_files) == 1, f"Expected 1 output file for {file_name}, found {len(output_files)}"
-            assert output_files[0].name == f"{file_name}.md"
             mock_docling_components["converter_instance"].convert.assert_called_once()
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES)
@@ -663,13 +660,13 @@ class TestMultiFormatProcessing:
             )
 
         output_dir = Path(extracted_text_artifact.path)
-        all_output_files = list(output_dir.glob("*.md")) + list(output_dir.glob("*.txt"))
+        all_output_files = list(output_dir.glob("*.md"))
         assert len(all_output_files) == 6, f"Expected 6 output files, found {len(all_output_files)}"
 
         expected_files = {
             "sample.pdf.md",
             "sample.docx.md",
-            "sample.txt",
+            "sample.txt.md",
             "sample.html.md",
             "sample.md.md",
             "sample.pptx.md",
