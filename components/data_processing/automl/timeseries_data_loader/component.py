@@ -195,8 +195,6 @@ def timeseries_data_loader(
 
         out = data.replace([float("inf"), float("-inf")], float("nan"))
 
-        out = out.copy()
-
         # Detect and handle numeric fractional year timestamps
         ts_series = out[ts_col]
         non_null_ts = ts_series[ts_series.notna()]
