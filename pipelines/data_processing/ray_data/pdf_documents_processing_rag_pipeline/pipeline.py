@@ -102,6 +102,7 @@ def rag_multistep_pipeline(
     llm_cpu_limits: str = "2",
     llm_memory_requests: str = "8Gi",
     llm_memory_limits: str = "8Gi",
+    llm_force_recreate: bool = False,
 ):
     """Multi-step RAG pipeline: parse PDFs, ingest into Milvus, deploy LLM.
 
@@ -166,6 +167,8 @@ def rag_multistep_pipeline(
         llm_cpu_limits: CPU limits for the LLM service.
         llm_memory_requests: Memory requests for the LLM service.
         llm_memory_limits: Memory limits for the LLM service.
+        llm_force_recreate: If True, delete and recreate the LLM InferenceService
+            (causes downtime). If False (default), patch in place.
     """
     # Step 1: Parse & chunk PDFs -> S3
     chunk_task = parse_and_chunk(
@@ -308,6 +311,7 @@ def rag_multistep_pipeline(
         memory_requests=llm_memory_requests,
         cpu_limits=llm_cpu_limits,
         memory_limits=llm_memory_limits,
+        force_recreate=llm_force_recreate,
     )
     deploy_task.set_caching_options(False)
     # No dependency on ingest_task — model deployment runs in parallel

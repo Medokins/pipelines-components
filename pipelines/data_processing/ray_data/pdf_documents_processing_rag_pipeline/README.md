@@ -70,6 +70,7 @@ Multi-step RAG pipeline: parse PDFs, ingest into Milvus, deploy LLM.
 | `llm_cpu_limits` | `str` | `2` | CPU limits for the LLM service. |
 | `llm_memory_requests` | `str` | `8Gi` | Memory requests for the LLM service. |
 | `llm_memory_limits` | `str` | `8Gi` | Memory limits for the LLM service. |
+| `llm_force_recreate` | `bool` | `False` | If True, delete and recreate the LLM InferenceService (causes downtime). If False (default), patch in place. |
 
 ## Metadata 🗂️
 

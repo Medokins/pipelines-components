@@ -45,7 +45,7 @@ Parse PDFs and write chunked JSONL files to S3.
 ## Metadata 🗂️
 
 - **Name**: parse_and_chunk
-- **Description**: Parse PDFs with Docling and chunk with HybridChunker using a Ray Data actor pool. Writes JSONL chunk files to PVC.
+- **Description**: Parse PDFs with Docling and chunk with HybridChunker using a Ray Data actor pool. Writes JSONL chunk files to S3-compatible bucket (MinIO).
 
 - **Stability**: experimental
 - **Dependencies**:
