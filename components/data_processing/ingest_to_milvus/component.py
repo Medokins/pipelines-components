@@ -63,7 +63,7 @@ def ingest_to_milvus(
     import requests as req_lib
     from pymilvus import CollectionSchema, DataType, FieldSchema, MilvusClient
 
-    # --- Read chunks from S3 ---
+    # --- S3 client ---
     s3 = boto3.client(
         "s3",
         endpoint_url=s3_endpoint,
@@ -72,25 +72,19 @@ def ingest_to_milvus(
         region_name="us-east-1",
     )
 
-    all_chunks = []
-    file_count = 0
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=s3_bucket, Prefix=s3_prefix + "/"):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if not key.endswith(".jsonl"):
-                continue
-            resp = s3.get_object(Bucket=s3_bucket, Key=key)
-            body = resp["Body"].read().decode("utf-8")
-            for line in body.strip().split("\n"):
-                if line:
-                    all_chunks.append(json.loads(line))
-            file_count += 1
-
-    print(f"Read {len(all_chunks)} chunks from {file_count} JSONL files in s3://{s3_bucket}/{s3_prefix}/")
-
-    if not all_chunks:
-        raise FileNotFoundError(f"No chunks found in s3://{s3_bucket}/{s3_prefix}/")
+    def stream_chunks_from_s3():
+        """Yield chunks one at a time from S3 JSONL files to avoid loading all into memory."""
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=s3_bucket, Prefix=s3_prefix + "/"):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith(".jsonl"):
+                    continue
+                resp = s3.get_object(Bucket=s3_bucket, Key=key)
+                body = resp["Body"].read().decode("utf-8")
+                for line in body.strip().split("\n"):
+                    if line:
+                        yield json.loads(line)
 
     # --- Setup Milvus collection ---
     uri = f"http://{milvus_host}:{milvus_port}"
@@ -156,15 +150,8 @@ def ingest_to_milvus(
 
         local_model = SentenceTransformer(embedding_model)
 
-    # --- Embed and insert ---
-    start_time = time.time()
-    total_inserted = 0
-
-    for i in range(0, len(all_chunks), milvus_batch_size):
-        batch = all_chunks[i : i + milvus_batch_size]
+    def _embed_and_insert(batch):
         texts = [c["text"] for c in batch]
-
-        # Generate embeddings
         if use_endpoint:
             all_embeddings = []
             for j in range(0, len(texts), embed_batch_size):
@@ -187,7 +174,6 @@ def ingest_to_milvus(
                 batch_size=embed_batch_size,
             ).tolist()
 
-        # Insert into Milvus
         data = [
             {
                 "source_file": c["source_file"],
@@ -198,11 +184,37 @@ def ingest_to_milvus(
             for c, emb in zip(batch, embeddings)
         ]
         client.insert(collection_name=collection_name, data=data)
-        total_inserted += len(data)
+        return len(data)
 
-        if (i // milvus_batch_size) % 10 == 0:
+    # --- Embed and insert in streaming batches ---
+    start_time = time.time()
+    total_inserted = 0
+    file_count = 0
+    batch = []
+    seen_files = set()
+
+    for chunk in stream_chunks_from_s3():
+        batch.append(chunk)
+        src = chunk.get("source_file", "")
+        if src not in seen_files:
+            seen_files.add(src)
+            file_count += 1
+
+        if len(batch) < milvus_batch_size:
+            continue
+
+        total_inserted += _embed_and_insert(batch)
+        batch = []
+
+        if (total_inserted // milvus_batch_size) % 10 == 0:
             elapsed = time.time() - start_time
-            print(f"  Inserted {total_inserted}/{len(all_chunks)} ({elapsed:.1f}s)")
+            print(f"  Inserted {total_inserted} vectors ({file_count} files, {elapsed:.1f}s)")
+
+    if batch:
+        total_inserted += _embed_and_insert(batch)
+
+    if total_inserted == 0:
+        raise FileNotFoundError(f"No chunks found in s3://{s3_bucket}/{s3_prefix}/")
 
     # Load collection for searching
     client.load_collection(collection_name)

@@ -26,6 +26,7 @@ Creates a vLLM NVIDIA GPU ServingRuntime and InferenceService matching the RHOAI
 | `memory_requests` | `str` | `8Gi` | Memory requests for the predictor pod. |
 | `cpu_limits` | `str` | `2` | CPU limits for the predictor pod. |
 | `memory_limits` | `str` | `8Gi` | Memory limits for the predictor pod. |
+| `force_recreate` | `bool` | `False` | If True, delete and recreate the InferenceService (causes downtime). If False (default), patch in place. |
 
 ## Outputs 📤
 

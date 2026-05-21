@@ -38,6 +38,7 @@ def model_deployment(
     memory_requests: str = "8Gi",
     cpu_limits: str = "2",
     memory_limits: str = "8Gi",
+    force_recreate: bool = False,
 ) -> str:
     """Deploy a model on OpenShift AI using vLLM InferenceService.
 
@@ -60,6 +61,8 @@ def model_deployment(
         memory_requests: Memory requests for the predictor pod.
         cpu_limits: CPU limits for the predictor pod.
         memory_limits: Memory limits for the predictor pod.
+        force_recreate: If True, delete and recreate the InferenceService
+            (causes downtime). If False (default), patch in place.
 
     Returns:
         The inference endpoint URL.
@@ -231,7 +234,7 @@ def model_deployment(
         },
     }
 
-    # Delete existing InferenceService if present to avoid stuck rolling updates
+    # --- Create or update InferenceService CR ---
     try:
         custom_api.get_namespaced_custom_object(
             group="serving.kserve.io",
@@ -240,6 +243,14 @@ def model_deployment(
             plural="inferenceservices",
             name=isvc_name,
         )
+        existing = True
+    except kclient.rest.ApiException as e:
+        if e.status == 404:
+            existing = False
+        else:
+            raise
+
+    if existing and force_recreate:
         custom_api.delete_namespaced_custom_object(
             group="serving.kserve.io",
             version="v1beta1",
@@ -248,7 +259,6 @@ def model_deployment(
             name=isvc_name,
         )
         print(f"Deleted existing InferenceService '{isvc_name}'. Waiting for cleanup...")
-        # Wait for old pods to terminate and release GPU
         for _ in range(24):
             time.sleep(5)
             try:
@@ -265,19 +275,27 @@ def model_deployment(
                     break
         else:
             print("Warning: old InferenceService still deleting, proceeding anyway.")
-    except kclient.rest.ApiException as e:
-        if e.status != 404:
-            raise
+        existing = False
 
-    # Create fresh InferenceService
-    custom_api.create_namespaced_custom_object(
-        group="serving.kserve.io",
-        version="v1beta1",
-        namespace=namespace,
-        plural="inferenceservices",
-        body=isvc,
-    )
-    print(f"InferenceService '{isvc_name}' created.")
+    if existing:
+        custom_api.patch_namespaced_custom_object(
+            group="serving.kserve.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="inferenceservices",
+            name=isvc_name,
+            body=isvc,
+        )
+        print(f"InferenceService '{isvc_name}' patched in place.")
+    else:
+        custom_api.create_namespaced_custom_object(
+            group="serving.kserve.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="inferenceservices",
+            body=isvc,
+        )
+        print(f"InferenceService '{isvc_name}' created.")
 
     # Wait for the InferenceService to become ready
     print("Waiting for InferenceService to become ready...")
