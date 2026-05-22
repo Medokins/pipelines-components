@@ -2,11 +2,17 @@
 
 import json
 import shutil
+import sys
 from pathlib import Path
+
+from scripts.generate_managed_pipelines.generate_managed_pipelines import main as generate_managed_pipelines
 
 APP_ROOT = Path("/app")
 OUTPUT_DIR = Path("/config/managed-pipelines")
 MANIFEST = "managed-pipelines.json"
+
+if generate_managed_pipelines() != 0:
+    sys.exit(1)
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
