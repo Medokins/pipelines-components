@@ -5,6 +5,7 @@ Output CSVs are asserted with the stdlib :mod:`csv` module.
 """
 
 import csv
+import datetime
 import io
 import json
 import os
@@ -85,6 +86,11 @@ def _read_csv_rows(path):
 
 
 MIN_VALID_RECORDS = 100
+
+
+def _date_from_day_offset(day_offset: int) -> str:
+    """Return an ISO date string for day_offset days after 2024-01-01."""
+    return (datetime.date(2024, 1, 1) + datetime.timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
 
 def _timeseries_csv(n_rows=MIN_VALID_RECORDS):
@@ -206,7 +212,7 @@ class TestTimeseriesDataLoaderUnitTests:
         for sid, letter in enumerate(["A", "B"]):
             base = sid * 100
             for i in range(50):
-                lines.append(f"{letter},2024-01-{i + 1:02d},{base + i},{i}")
+                lines.append(f"{letter},{_date_from_day_offset(i)},{base + i},{i}")
         body_stream = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
         sampled_test = _make_test_artifact(tmp_path)
 
@@ -596,7 +602,7 @@ class TestTimeseriesDataLoaderScenarioMatrix:
         lines = ["item_id,timestamp,target,feature"]
         for sid, base in (("X", 0), ("Y", 100)):
             for i in range(50):
-                lines.append(f"{sid},2024-01-{i + 1:02d},{base + i},{i}")
+                lines.append(f"{sid},{_date_from_day_offset(i)},{base + i},{i}")
         return "\n".join(lines) + "\n"
 
     @staticmethod
@@ -608,7 +614,7 @@ class TestTimeseriesDataLoaderScenarioMatrix:
             rng = random.Random(seed + idx * 31)
             rng.shuffle(order)
             for i in order:
-                rows.append(f"{sid},2024-01-{i + 1:02d},{base + i},{i}")
+                rows.append(f"{sid},{_date_from_day_offset(i)},{base + i},{i}")
         rng2 = random.Random(seed + 99)
         rng2.shuffle(rows)
         lines.extend(rows)

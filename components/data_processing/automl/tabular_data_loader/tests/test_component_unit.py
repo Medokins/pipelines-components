@@ -36,12 +36,22 @@ def _pad_tabular_csv(csv_content: str, min_rows: int = MIN_VALID_RECORDS + 1) ->
     label_idx = ncol - 1
     data = lines[1:]
     sample_labels = [row.split(",")[label_idx] for row in data if row]
-    is_classification = any(lbl.strip().isalpha() for lbl in sample_labels if lbl.strip())
+    non_empty_labels = [
+        lbl.strip() for lbl in sample_labels if lbl.strip() and lbl.strip().lower() not in {"inf", "-inf", "nan"}
+    ]
+    # Alphabetic or purely numeric class codes (e.g. 0/1); exclude regression-scale numeric targets (>= 10).
+    is_classification = any(lbl.isalpha() or lbl.isdigit() for lbl in non_empty_labels) and not (
+        non_empty_labels
+        and all(lbl.isdigit() for lbl in non_empty_labels)
+        and any(int(lbl) >= 10 for lbl in non_empty_labels)
+    )
+    label_pool = non_empty_labels or sample_labels
     i = len(data)
     while len(data) < min_rows:
         if is_classification:
-            label = ["A", "B", "C", "X", "Y"][i % 5]
-            values = [str(i + j) for j in range(ncol - 1)] + [label]
+            label = label_pool[i % len(label_pool)]
+            # Scale features so padded rows cannot collide with original low-magnitude values.
+            values = [str(i * 1000 + j) for j in range(ncol - 1)] + [label]
         else:
             values = [str(i + j) for j in range(ncol - 1)] + [str(i % 10)]
         data.append(",".join(values))
