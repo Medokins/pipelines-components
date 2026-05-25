@@ -250,8 +250,7 @@ class TestCompileManagedPipeline:
 
 
 @pytest.mark.parametrize(
-    ("env",
-    "expected"),
+    ("env", "expected"),
     [
         ({}, False),
         ({RELATED_IMAGE_AUTOML_ENV: ""}, False),
