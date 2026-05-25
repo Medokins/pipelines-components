@@ -77,7 +77,6 @@ def parse_and_chunk(
     Returns:
         The S3 URI where JSONL chunk files were written.
     """
-    import base64
     import textwrap
     import time
 
@@ -576,10 +575,6 @@ def parse_and_chunk(
 
     rayjob_name = f"docling-chunk-{int(time.time())}"
 
-    # Encode entrypoint script as base64 env var to avoid creating
-    # Secrets or ConfigMaps (service account lacks permissions for both).
-    script_b64 = base64.b64encode(_DOCLING_CHUNK_PROCESS_PY.encode()).decode()
-
     shared_mount = V1VolumeMount(pvc_mount_path, name="shared-data", read_only=True)
     data_volume = V1Volume(
         name="shared-data",
@@ -610,7 +605,13 @@ def parse_and_chunk(
 
     job = RayJob(
         job_name=rayjob_name,
-        entrypoint="python -c \"import base64,os;exec(base64.b64decode(os.environ['ENTRYPOINT_SCRIPT']).decode())\"",
+        entrypoint=(
+            'python -c "import os;'
+            "f=open('/tmp/ep.py','w');"
+            "f.write(os.environ['ENTRYPOINT_SCRIPT']);"
+            'f.close()"'
+            " && python /tmp/ep.py"
+        ),
         cluster_config=cluster_config,
         namespace=namespace,
         runtime_env=RuntimeEnv(
@@ -620,7 +621,7 @@ def parse_and_chunk(
                 "boto3>=1.28.0",
             ],
             env_vars={
-                "ENTRYPOINT_SCRIPT": script_b64,
+                "ENTRYPOINT_SCRIPT": _DOCLING_CHUNK_PROCESS_PY,
                 "PVC_MOUNT_PATH": pvc_mount_path,
                 "INPUT_PATH": input_path,
                 "NUM_FILES": str(num_files),
