@@ -653,6 +653,13 @@ def parse_and_chunk(
     )
 
     custom_api = k8s_client.CustomObjectsApi()
+
+    # The codeflare SDK's vendored kuberay_job_api creates its own
+    # CustomObjectsApi in __init__, which may pick up a stale kubeconfig
+    # instead of the in-cluster SA token. Replace it with one that uses
+    # the in-cluster config we loaded above.
+    job._api.api = custom_api
+
     rayjob_group = "ray.io"
     rayjob_version = "v1"
     rayjob_plural = "rayjobs"
