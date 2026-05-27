@@ -11,8 +11,8 @@ RUN pip wheel --no-deps --index-url https://console.redhat.com/api/pypi/public-r
 
 FROM ${BASE_IMAGE}
 
-COPY --from=builder /tmp/dist/*.whl /tmp/
-RUN pip install --no-cache-dir --no-deps /tmp/*.whl
+COPY --from=builder /tmp/dist/kfp_components-*.whl /tmp/
+RUN pip install --no-cache-dir --no-deps /tmp/kfp_components-*.whl
 
 COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.txt \
      pipelines/training/automl/autogluon_tabular_training_pipeline/requirements-pypi.txt \
