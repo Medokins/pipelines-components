@@ -282,11 +282,12 @@ def autogluon_timeseries_models_training(
             )
             metrics = predictor_refit.evaluate(test_ts, metrics=list(AVAILABLE_METRICS.keys()))
 
-            metrics_dict = {
-                k: float(v) if hasattr(v, "item") else v
-                for k, v in metrics.items()
-                if not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
-            }
+            metrics_dict = {}
+            for k, v in metrics.items():
+                if hasattr(v, "item"):
+                    v = float(v)
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    metrics_dict[k] = v
 
             if eval_metric not in metrics_dict:
                 raise ValueError(
