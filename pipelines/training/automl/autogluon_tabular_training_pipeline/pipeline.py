@@ -4,7 +4,7 @@ from kfp import dsl
 from kfp_components.components.data_processing.automl.tabular_data_loader import automl_data_loader
 from kfp_components.components.training.automl.autogluon_leaderboard_evaluation import leaderboard_evaluation
 from kfp_components.components.training.automl.autogluon_models_training import autogluon_models_training
-from kfp_components.components.training.automl.pipeline_manifest_publisher import publish_pipeline_manifest
+from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
@@ -60,8 +60,8 @@ def autogluon_tabular_training_pipeline(
 
     **Pipeline Stages:**
 
-    0. **Run status initialization**: Seeds ``.automl/run_status.json`` on the workspace and
-       publishes an initial ``run_status`` artifact for dashboards before any data I/O.
+    0. **Component stage map**: Publishes the static component→stage→step map as a KFP
+       artifact for dashboards before any data I/O.
 
     1. **Data Loading & Splitting**: Loads tabular (CSV) data from an S3-compatible
        object storage bucket using AWS credentials configured via Kubernetes secrets.
@@ -149,13 +149,15 @@ def autogluon_tabular_training_pipeline(
     """  # noqa: E501
     from kfp.kubernetes import use_secret_as_env
 
-    # Publish pipeline manifest first so dashboard knows expected structure
-    manifest_task = publish_pipeline_manifest(
+    # Publish component→stage→step map first so dashboards know expected structure
+    component_stage_map_task = publish_component_stage_map(
         pipeline_id=RUN_STATUS_PIPELINE_ID,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
     )
-    manifest_task.set_caching_options(False)
-    manifest_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
+    component_stage_map_task.set_caching_options(False)
+    component_stage_map_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
+        "1Gi"
+    )
 
     data_loader_task = automl_data_loader(
         bucket_name=train_data_bucket_name,
@@ -164,7 +166,7 @@ def autogluon_tabular_training_pipeline(
         label_column=label_column,
         task_type=task_type,
     )
-    data_loader_task.after(manifest_task)
+    data_loader_task.after(component_stage_map_task)
     data_loader_task.set_caching_options(False)
     data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(MAX_MEMORY)
 

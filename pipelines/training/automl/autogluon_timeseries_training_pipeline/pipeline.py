@@ -6,7 +6,7 @@ from kfp_components.components.training.automl.autogluon_leaderboard_evaluation 
 from kfp_components.components.training.automl.autogluon_timeseries_models_training import (
     autogluon_timeseries_models_training,
 )
-from kfp_components.components.training.automl.pipeline_manifest_publisher import publish_pipeline_manifest
+from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
@@ -61,8 +61,8 @@ def autogluon_timeseries_training_pipeline(
 
     Pipeline stages:
 
-    0. **Run status initialization**: Seeds ``.automl/run_status.json`` and publishes an initial
-       ``run_status`` artifact for dashboards before data loading.
+    0. **Component stage map**: Publishes the static component→stage→step map as a KFP
+       artifact for dashboards before data loading.
 
     1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MB),
        replaces ``+/-inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps
@@ -123,13 +123,15 @@ def autogluon_timeseries_training_pipeline(
             top_n=3,
         )
     """
-    # Publish pipeline manifest first so dashboard knows expected structure
-    manifest_task = publish_pipeline_manifest(
+    # Publish component→stage→step map first so dashboards know expected structure
+    component_stage_map_task = publish_component_stage_map(
         pipeline_id=RUN_STATUS_PIPELINE_ID,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
     )
-    manifest_task.set_caching_options(False)
-    manifest_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
+    component_stage_map_task.set_caching_options(False)
+    component_stage_map_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
+        "1Gi"
+    )
 
     # Stage 1: Data Loading & Splitting
     data_loader_task = timeseries_data_loader(
@@ -140,7 +142,7 @@ def autogluon_timeseries_training_pipeline(
         id_column=id_column,
         timestamp_column=timestamp_column,
     )
-    data_loader_task.after(manifest_task)
+    data_loader_task.after(component_stage_map_task)
     data_loader_task.set_caching_options(False)
     data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(MAX_MEMORY)
 

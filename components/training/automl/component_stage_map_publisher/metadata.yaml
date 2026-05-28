@@ -1,5 +1,5 @@
 ---
-name: pipeline_manifest_publisher
+name: component_stage_map_publisher
 stability: alpha
 dependencies:
   kubeflow:
