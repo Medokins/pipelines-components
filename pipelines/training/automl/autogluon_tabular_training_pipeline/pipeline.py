@@ -60,7 +60,7 @@ def autogluon_tabular_training_pipeline(
 
     **Pipeline Stages:**
 
-    0. **Component stage map**: Publishes the static component→stage→step map as a KFP
+    0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP
        artifact for dashboards before any data I/O.
 
     1. **Data Loading & Splitting**: Loads tabular (CSV) data from an S3-compatible
@@ -149,7 +149,7 @@ def autogluon_tabular_training_pipeline(
     """  # noqa: E501
     from kfp.kubernetes import use_secret_as_env
 
-    # Publish component→stage→step map first so dashboards know expected structure
+    # Publish component-to-stage-to-step map first so dashboards know expected structure
     component_stage_map_task = publish_component_stage_map(
         pipeline_id=RUN_STATUS_PIPELINE_ID,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,

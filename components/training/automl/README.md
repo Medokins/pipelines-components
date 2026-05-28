@@ -4,6 +4,6 @@ This subcategory contains components in the **Automl** group:
 
 - [Autogluon Models Training](./autogluon_models_training/README.md): Train AutoGluon models, select the top N, and refit each on the full dataset.
 - [Autogluon Timeseries Models Training](./autogluon_timeseries_models_training/README.md): Train, select, and full-refit top N AutoGluon timeseries models.
-- [Component Stage Map Publisher](./component_stage_map_publisher/README.md): Publish the component→stage→step map for dashboard consumption.
+- [Component Stage Map Publisher](./component_stage_map_publisher/README.md): Publish the component-to-stage-to-step map for dashboard consumption.
 - [Leaderboard Evaluation](./autogluon_leaderboard_evaluation/README.md): Evaluate refitted AutoGluon models and generate a leaderboard.
 - [Run Status Artifact Initialization](./run_status_artifact_initialization/README.md): Seed workspace run status and publish an initial KFP artifact for dashboards.

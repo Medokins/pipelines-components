@@ -15,7 +15,7 @@ Training datasets are stored on a PVC workspace (not S3 artifacts) so that all p
 
 **Pipeline Stages:**
 
-0. **Component stage map**: Publishes the static component→stage→step map as a KFP artifact for dashboards before any data I/O.
+0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP artifact for dashboards before any data I/O.
 
 1. **Data Loading & Splitting**: Loads tabular (CSV) data from an S3-compatible object storage bucket using AWS credentials configured via Kubernetes secrets. The component samples the data (up to 1GB), then performs a two-stage split: *Primary split** (default 80/20): separates a *test set* (20%,
 written to an S3 artifact) from the *train portion* (80%). **Secondary split** (default 30/70 of the train portion): produces ``models_selection_train_dataset.csv`` (30%, used for model selection) and ``extra_train_dataset.csv`` (70%, passed to ``refit_full`` as extra data). Both train CSVs are

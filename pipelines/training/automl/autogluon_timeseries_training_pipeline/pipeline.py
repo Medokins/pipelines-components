@@ -61,7 +61,7 @@ def autogluon_timeseries_training_pipeline(
 
     Pipeline stages:
 
-    0. **Component stage map**: Publishes the static component→stage→step map as a KFP
+    0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP
        artifact for dashboards before data loading.
 
     1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MB),
@@ -123,7 +123,7 @@ def autogluon_timeseries_training_pipeline(
             top_n=3,
         )
     """
-    # Publish component→stage→step map first so dashboards know expected structure
+    # Publish component-to-stage-to-step map first so dashboards know expected structure
     component_stage_map_task = publish_component_stage_map(
         pipeline_id=RUN_STATUS_PIPELINE_ID,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,

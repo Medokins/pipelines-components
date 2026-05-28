@@ -1,6 +1,6 @@
 """Component stage map publisher for AutoML pipelines.
 
-Publishes the static component→stage→step map as a KFP artifact at pipeline start so
+Publishes the static component-to-stage-to-step map as a KFP artifact at pipeline start so
 dashboards know the expected structure before components run.
 """
 
@@ -16,7 +16,7 @@ def publish_component_stage_map(
     run_id: str,
     component_stage_map: dsl.Output[dsl.Artifact],
 ) -> None:
-    """Publish the component→stage→step map for dashboard consumption.
+    """Publish the component-to-stage-to-step map for dashboard consumption.
 
     Reads the static JSON template from the package (``run_status_templates/pipelines/``)
     and publishes it as a KFP artifact. Dashboards use this map to show expected
@@ -26,7 +26,7 @@ def publish_component_stage_map(
         pipeline_id: Pipeline identifier matching the template filename
             (e.g. ``autogluon-tabular-training-pipeline``).
         run_id: KFP run ID for tracking (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``).
-        component_stage_map: Output artifact containing the component→stage→step map.
+        component_stage_map: Output artifact containing the component-to-stage-to-step map.
 
     Raises:
         FileNotFoundError: If the template for ``pipeline_id`` is missing or empty.

@@ -4,7 +4,7 @@
 
 ## Overview 🧾
 
-Publish the component→stage→step map for dashboard consumption.
+Publish the component-to-stage-to-step map for dashboard consumption.
 
 Reads the static JSON template from the package (``run_status_templates/pipelines/``) and publishes it as a KFP artifact. Dashboards use this map to show expected components, stages, and steps before pipeline execution begins.
 
@@ -14,7 +14,7 @@ Reads the static JSON template from the package (``run_status_templates/pipeline
 | --------- | ---- | ------- | ----------- |
 | `pipeline_id` | `str` | `None` | Pipeline identifier matching the template filename (e.g. ``autogluon-tabular-training-pipeline``). |
 | `run_id` | `str` | `None` | KFP run ID for tracking (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``). |
-| `component_stage_map` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing the component→stage→step map. |
+| `component_stage_map` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing the component-to-stage-to-step map. |
 
 ## Outputs 📤
 
