@@ -311,9 +311,7 @@ def ensure_pipeline_plan(
     if not isinstance(pipeline_id, str) or not pipeline_id:
         return
     manifest = load_pipeline_run_status_manifest(pipeline_id, templates_root=templates_root)
-    existing = {
-        entry["id"]: entry for entry in _components_list(document) if isinstance(entry.get("id"), str)
-    }
+    existing = {entry["id"]: entry for entry in _components_list(document) if isinstance(entry.get("id"), str)}
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for comp_def in _manifest_component_definitions(manifest):
