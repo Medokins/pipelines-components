@@ -18,7 +18,7 @@ def autogluon_models_training(
     run_id: str,
     sample_row: str,
     models_artifact: dsl.Output[dsl.Model],
-    run_status_artifact: dsl.Output[dsl.Artifact],
+    component_status: dsl.Output[dsl.Artifact],
     sampling_config: Optional[dict] = None,
     split_config: Optional[dict] = None,
     extra_train_data_path: str = "",
@@ -53,7 +53,7 @@ def autogluon_models_training(
         run_id: Pipeline run ID written into the generated notebook.
         sample_row: JSON array of row dicts for the notebook example input; label column is stripped.
         models_artifact: Output Model artifact containing all refitted model subdirectories.
-        run_status_artifact: KFP artifact with a snapshot of ``.automl/run_status.json``.
+        component_status: Output artifact containing stage-level progress tracking for this component.
         sampling_config: Data sampling config stored in artifact metadata.
         split_config: Data split config stored in artifact metadata.
         extra_train_data_path: Optional path to extra training CSV passed to ``refit_full``.
@@ -135,16 +135,15 @@ def autogluon_models_training(
 
     logger = logging.getLogger(__name__)
 
-    from kfp_components.components.training.automl.shared.run_status import (
-        COMPONENT_MODELS_TRAINING,
-        RUN_STATUS_ARTIFACT_DISPLAY_NAME,
-        RunStatusRecorder,
-        shared_automl_dir,
-    )
+    from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
+    from kfp_components.components.training.automl.shared.run_status import shared_automl_dir
 
-    run_status = RunStatusRecorder(workspace_path, COMPONENT_MODELS_TRAINING)
-    run_status.begin()
-    run_status.record("load_data", "completed")
+    # Initialize status tracker
+    status = ComponentStatusTracker(component_status.path, "autogluon_models_training")
+
+    # Stage: load_data
+    status.record("load_data", "started")
+    status.record("load_data", "completed")
 
     DEFAULT_PRESET = "medium_quality"
     DEFAULT_TIME_LIMIT = 30 * 60  # 30 minutes
@@ -207,7 +206,7 @@ def autogluon_models_training(
             "classes ['abc', 'def'] -> positive_class='def')."
         )
 
-    run_status.record("model_selection", "started")
+    status.record("model_selection", "started")
     predictor = TabularPredictor(**predictor_init_kwargs).fit(
         train_data=train_data_df,
         num_stack_levels=1,
@@ -222,11 +221,12 @@ def autogluon_models_training(
     leaderboard = predictor.leaderboard(test_data_df)
     logger.info("Leaderboard:\n\n %s", leaderboard.head(top_n).to_string())
     top_models = leaderboard.head(top_n)["model"].values.tolist()
-    run_status.record(
+    status.record(
         "model_selection",
         "completed",
         top_n=top_n,
         selected_models=top_models,
+        steps=["feature_engineering", "model_training", "stacking", "model_evaluation"],
     )
 
     model_config = {
@@ -271,9 +271,9 @@ def autogluon_models_training(
     predictor_clone = predictor.clone(path=work_path, return_clone=True, dirs_exist_ok=True)
 
     # Refit all top models in a single call:  AutoGluon resolves stacking dependencies internally.
-    run_status.record("refit_full", "started")
+    status.record("refit_full", "started")
     predictor_clone.refit_full(model=top_models, train_data_extra=extra_train_df)
-    run_status.record("refit_full", "completed", model_count=len(model_names_full))
+    status.record("refit_full", "completed", model_count=len(model_names_full))
 
     def replace_placeholder_in_notebook(notebook, replacements):
         for cell in notebook.get("cells", []):
@@ -627,10 +627,10 @@ def autogluon_models_training(
         "models": models_metadata,
     }
 
-    run_status.record("evaluate_models", "completed", eval_metric=str(predictor.eval_metric))
-    run_status.complete()
-    run_status.publish_artifact(run_status_artifact.path)
-    run_status_artifact.metadata["display_name"] = RUN_STATUS_ARTIFACT_DISPLAY_NAME
+    status.record("evaluate_models", "completed", eval_metric=str(predictor.eval_metric))
+    # Component status will be saved at the end
+    status.save()
+    component_status.metadata["display_name"] = "Models Training Status"
 
     return NamedTuple("outputs", eval_metric=str)(eval_metric=str(predictor.eval_metric))
 

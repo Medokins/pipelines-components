@@ -13,7 +13,7 @@ def automl_data_loader(  # noqa: D417
     workspace_path: str,
     label_column: str,
     sampled_test_dataset: dsl.Output[dsl.Dataset],
-    run_status_artifact: dsl.Output[dsl.Artifact],
+    component_status: dsl.Output[dsl.Artifact],
     sampling_method: Optional[str] = None,
     task_type: str = "regression",
     split_config: Optional[dict] = None,
@@ -68,7 +68,7 @@ def automl_data_loader(  # noqa: D417
         workspace_path: PVC workspace directory where train CSVs will be written.
         label_column: Name of the label/target column in the dataset.
         sampled_test_dataset: Output dataset artifact for the test split.
-        run_status_artifact: KFP artifact with a snapshot of ``.automl/run_status.json``.
+        component_status: Output artifact containing stage-level progress tracking for this component.
         sampling_method: "first_n_rows", "stratified", or "random"; if None, derived from task_type.
         task_type: "binary", "multiclass", or "regression" (default); used when sampling_method is None.
         split_config: Split configuration dictionary. Available keys: "test_size" (float), "random_state" (int), "stratify" (bool).
@@ -127,15 +127,15 @@ def automl_data_loader(  # noqa: D417
     elif selection_train_size <= 0 or selection_train_size >= 1:
         raise ValueError("selection_train_size must be in a range 0 to 1.")
 
-    from kfp_components.components.training.automl.shared.run_status import (
-        COMPONENT_DATA_LOADER,
-        RUN_STATUS_ARTIFACT_DISPLAY_NAME,
-        RunStatusRecorder,
-    )
+    from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
 
-    run_status = RunStatusRecorder(workspace_path, COMPONENT_DATA_LOADER)
-    run_status.begin()
-    run_status.record("validate_inputs", "completed")
+    # Initialize status tracker
+    status = ComponentStatusTracker(component_status.path, "automl_data_loader")
+
+    # Stage: validate_inputs
+    status.record("validate_inputs", "started")
+    # Validation happens inline below
+    status.record("validate_inputs", "completed")
 
     if sampling_method is None:
         if task_type in ("binary", "multiclass"):
@@ -323,7 +323,8 @@ def automl_data_loader(  # noqa: D417
             return _sample_random(text_stream, PANDAS_CHUNK_SIZE, max_size_bytes)
         return _sample_first_n_rows(text_stream, PANDAS_CHUNK_SIZE, max_size_bytes)
 
-    run_status.record(
+    # Stage: read_and_sample
+    status.record(
         "read_and_sample",
         "started",
         sampling_method=sampling_method,
@@ -345,8 +346,10 @@ def automl_data_loader(  # noqa: D417
             f"Available columns: {list(sampled_dataframe.columns)}"
         )
 
-    run_status.record("read_and_sample", "completed", rows=len(sampled_dataframe))
-    run_status.record("cleanse", "started")
+    status.record("read_and_sample", "completed", rows=len(sampled_dataframe))
+
+    # Stage: cleanse
+    status.record("cleanse", "started")
 
     sampled_dataframe.replace([math.inf, -math.inf], float("nan"), inplace=True)
 
@@ -389,14 +392,16 @@ def automl_data_loader(  # noqa: D417
 
     n_samples = n_valid
     logger.info("Read %d rows from s3://%s/%s (sampling_method=%s)", n_samples, bucket_name, file_key, sampling_method)
-    run_status.record(
+    status.record(
         "cleanse",
         "completed",
         rows=n_samples,
         duplicates_dropped=n_dup_dropped,
         labels_dropped=n_dropped,
     )
-    run_status.record("split", "started")
+
+    # Stage: split
+    status.record("split", "started")
 
     # --- Train/test split ---
     from pathlib import Path
@@ -452,17 +457,21 @@ def automl_data_loader(  # noqa: D417
     # Write test to S3 artifact
     X_y_test.to_csv(sampled_test_dataset.path, index=False)
 
-    run_status.record(
+    status.record(
         "split",
         "completed",
         test_size=test_size,
         selection_train_size=selection_train_size,
         stratify=stratify_effective,
     )
-    run_status.record("write_outputs", "completed")
-    run_status.complete()
-    run_status.publish_artifact(run_status_artifact.path)
-    run_status_artifact.metadata["display_name"] = RUN_STATUS_ARTIFACT_DISPLAY_NAME
+
+    # Stage: write_outputs
+    status.record("write_outputs", "started")
+    status.record("write_outputs", "completed")
+
+    # Save component status to artifact
+    status.save()
+    component_status.metadata["display_name"] = "Data Loader Status"
 
     # Sample row for downstream use (JSON string to avoid NaN issues)
     sample_row = X_y_test.head(1).to_json(orient="records")
