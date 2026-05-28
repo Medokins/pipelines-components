@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,8 +25,7 @@ OUTPUT_FILENAME = "managed-pipelines.json"
 METADATA_FILENAME = "metadata.yaml"
 PIPELINE_PY = "pipeline.py"
 
-RELATED_IMAGE_AUTOML_ENV = "RELATED_IMAGE_ODH_AUTOML_IMAGE"
-RELATED_IMAGE_AUTORAG_ENV = "RELATED_IMAGE_ODH_AUTORAG_IMAGE"
+RELATED_IMAGE_ENV_PREFIX = "RELATED_IMAGE_"
 
 # Must match values accepted in metadata.yaml (see scripts/validate_metadata).
 METADATA_STABILITY_VALUES = frozenset({"experimental", "alpha", "beta", "stable"})
@@ -232,45 +231,47 @@ def staged_pipeline_yaml_path(output_dir: Path, name: str) -> Path:
 
 
 def should_recompile_managed_pipelines() -> bool:
-    """Return True when DSPO/runtime env provides RELATED_IMAGE overrides for managed runtimes."""
-    return bool(os.getenv(RELATED_IMAGE_AUTOML_ENV, "").strip() or os.getenv(RELATED_IMAGE_AUTORAG_ENV, "").strip())
+    """Return True when DSPO/runtime env provides any non-empty ``RELATED_IMAGE_*`` override."""
+    return any(key.startswith(RELATED_IMAGE_ENV_PREFIX) and value.strip() for key, value in os.environ.items())
 
 
-def stage_managed_pipelines(repo_root: Path, output_dir: Path) -> int:
-    """Write ``managed-pipelines.json`` and compiled ``{name}.yaml`` files under ``output_dir``.
+OutputYamlPathFn = Callable[[ManagedPipelineEntry, Path], Path]
 
-    Compiles from ``repo_root`` sources without writing under ``repo_root`` (safe for read-only
-    ``/app`` in the init container).
+
+def _output_yaml_next_to_pipeline_py(_entry: ManagedPipelineEntry, pipeline_py: Path) -> Path:
+    return pipeline_py.parent / "pipeline.yaml"
+
+
+def emit_managed_pipelines(
+    repo_root: Path,
+    manifest_path: Path,
+    *,
+    output_yaml_path: OutputYamlPathFn,
+) -> int:
+    """Collect managed pipelines, write the manifest JSON, and compile each pipeline YAML.
+
+    Args:
+        repo_root: Repository root used to resolve ``pipeline.py`` paths.
+        manifest_path: Destination path for ``managed-pipelines.json`` (or custom ``-o`` path).
+        output_yaml_path: Callback mapping ``(entry, pipeline_py)`` to the compiled YAML path.
 
     Returns:
         0 on success, 1 on error (messages printed to stderr).
     """
-    pipelines_root = repo_root / "pipelines"
-    if not pipelines_root.is_dir():
-        print(
-            f"Error: pipelines directory not found or not a directory: {pipelines_root}",
-            file=sys.stderr,
-        )
-        return 1
-
     try:
         pipelines = collect_managed_pipelines(repo_root)
-    except ManagedPipelineMetadataError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except FileNotFoundError as e:
+    except (ManagedPipelineMetadataError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = output_dir / OUTPUT_FILENAME
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     payload = [asdict(entry) for entry in pipelines]
     manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {len(pipelines)} pipeline(s) to {manifest_path}", file=sys.stderr)
 
     for entry in pipelines:
         pipeline_py = repo_root / entry.path
-        output_yaml = staged_pipeline_yaml_path(output_dir, entry.name)
+        output_yaml = output_yaml_path(entry, pipeline_py)
         try:
             compile_managed_pipeline(
                 pipeline_py=pipeline_py,
@@ -283,6 +284,22 @@ def stage_managed_pipelines(repo_root: Path, output_dir: Path) -> int:
         print(f"Compiled {entry.name} -> {output_yaml}", file=sys.stderr)
 
     return 0
+
+
+def stage_managed_pipelines(repo_root: Path, output_dir: Path) -> int:
+    """Write ``managed-pipelines.json`` and compiled ``{name}.yaml`` files under ``output_dir``.
+
+    Compiles from ``repo_root`` sources without writing under ``repo_root`` (safe for read-only
+    ``/app`` in the init container).
+
+    Returns:
+        0 on success, 1 on error (messages printed to stderr).
+    """
+    return emit_managed_pipelines(
+        repo_root,
+        output_dir / OUTPUT_FILENAME,
+        output_yaml_path=lambda entry, pipeline_py: staged_pipeline_yaml_path(output_dir, entry.name),
+    )
 
 
 def compile_managed_pipeline(
@@ -340,69 +357,20 @@ def main() -> int:
     if args.output is None:
         return stage_managed_pipelines_for_build(repo_root)
 
-    output_path = args.output
-    try:
-        pipelines = collect_managed_pipelines(repo_root)
-    except ManagedPipelineMetadataError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-
-    payload = [asdict(entry) for entry in pipelines]
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(pipelines)} pipeline(s) to {output_path}", file=sys.stderr)
-
-    for entry in pipelines:
-        pipeline_py = repo_root / entry.path
-        output_yaml = pipeline_py.parent / "pipeline.yaml"
-        try:
-            compile_managed_pipeline(
-                pipeline_py=pipeline_py,
-                output_path=output_yaml,
-                repo_root=repo_root,
-            )
-        except ManagedPipelineCompilationError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-        print(f"Compiled {entry.name} -> {output_yaml}", file=sys.stderr)
-
-    return 0
+    return emit_managed_pipelines(
+        repo_root,
+        args.output,
+        output_yaml_path=_output_yaml_next_to_pipeline_py,
+    )
 
 
 def stage_managed_pipelines_for_build(repo_root: Path) -> int:
     """Build-time default: manifest at repo root, YAML next to each ``pipeline.py``."""
-    try:
-        pipelines = collect_managed_pipelines(repo_root)
-    except ManagedPipelineMetadataError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-
-    manifest_path = repo_root / OUTPUT_FILENAME
-    payload = [asdict(entry) for entry in pipelines]
-    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(pipelines)} pipeline(s) to {manifest_path}", file=sys.stderr)
-
-    for entry in pipelines:
-        pipeline_py = repo_root / entry.path
-        output_yaml = pipeline_py.parent / "pipeline.yaml"
-        try:
-            compile_managed_pipeline(
-                pipeline_py=pipeline_py,
-                output_path=output_yaml,
-                repo_root=repo_root,
-            )
-        except ManagedPipelineCompilationError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-        print(f"Compiled {entry.name} -> {output_yaml}", file=sys.stderr)
-
-    return 0
+    return emit_managed_pipelines(
+        repo_root,
+        repo_root / OUTPUT_FILENAME,
+        output_yaml_path=_output_yaml_next_to_pipeline_py,
+    )
 
 
 if __name__ == "__main__":

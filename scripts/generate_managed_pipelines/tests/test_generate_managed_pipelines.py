@@ -9,8 +9,7 @@ import yaml
 
 from ..generate_managed_pipelines import (
     METADATA_STABILITY_VALUES,
-    RELATED_IMAGE_AUTOML_ENV,
-    RELATED_IMAGE_AUTORAG_ENV,
+    RELATED_IMAGE_ENV_PREFIX,
     STABILITY_TO_MANAGED_DISPLAY,
     ManagedPipelineCompilationError,
     ManagedPipelineMetadataError,
@@ -19,8 +18,6 @@ from ..generate_managed_pipelines import (
     main,
     managed_pipeline_entry_from_dir,
     should_recompile_managed_pipelines,
-    stage_managed_pipelines,
-    staged_pipeline_yaml_path,
 )
 
 
@@ -246,25 +243,35 @@ class TestCompileManagedPipeline:
 
 
 # ---------------------------------------------------------------------------
-# should_recompile_managed_pipelines / stage_managed_pipelines (init path)
+# should_recompile_managed_pipelines (init path)
 # ---------------------------------------------------------------------------
+
+
+def _clear_related_image_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    for key in list(os.environ):
+        if key.startswith(RELATED_IMAGE_ENV_PREFIX):
+            monkeypatch.delenv(key, raising=False)
 
 
 @pytest.mark.parametrize(
     ("env", "expected"),
     [
         ({}, False),
-        ({RELATED_IMAGE_AUTOML_ENV: ""}, False),
-        ({RELATED_IMAGE_AUTOML_ENV: "   "}, False),
-        ({RELATED_IMAGE_AUTOML_ENV: "quay.io/example/automl-runtime@sha256:aaa"}, True),
-        ({RELATED_IMAGE_AUTORAG_ENV: "quay.io/example/autorag-runtime@sha256:bbb"}, True),
+        ({"RELATED_IMAGE_ODH_AUTOML_IMAGE": ""}, False),
+        ({"RELATED_IMAGE_ODH_AUTOML_IMAGE": "   "}, False),
+        ({"RELATED_IMAGE_ODH_AUTOML_IMAGE": "quay.io/example/automl-runtime@sha256:aaa"}, True),
+        ({"RELATED_IMAGE_ODH_AUTORAG_IMAGE": "quay.io/example/autorag-runtime@sha256:bbb"}, True),
         (
             {
-                RELATED_IMAGE_AUTOML_ENV: "quay.io/example/automl-runtime@sha256:aaa",
-                RELATED_IMAGE_AUTORAG_ENV: "quay.io/example/autorag-runtime@sha256:bbb",
+                "RELATED_IMAGE_ODH_AUTOML_IMAGE": "quay.io/example/automl-runtime@sha256:aaa",
+                "RELATED_IMAGE_ODH_AUTORAG_IMAGE": "quay.io/example/autorag-runtime@sha256:bbb",
             },
             True,
         ),
+        ({"RELATED_IMAGE_ODH_FUTURE_RUNTIME_IMAGE": "quay.io/example/future@sha256:ccc"}, True),
+        ({"UNRELATED_IMAGE_FOO": "quay.io/example/not-related"}, False),
     ],
 )
 def test_should_recompile_managed_pipelines(
@@ -272,64 +279,11 @@ def test_should_recompile_managed_pipelines(
     env: dict[str, str],
     expected: bool,
 ) -> None:
-    """Init recompiles when either AutoML or AutoRAG RELATED_IMAGE env is non-empty."""
-    monkeypatch.delenv(RELATED_IMAGE_AUTOML_ENV, raising=False)
-    monkeypatch.delenv(RELATED_IMAGE_AUTORAG_ENV, raising=False)
+    """Init recompiles when any non-empty RELATED_IMAGE_* env var is set."""
+    _clear_related_image_env(monkeypatch)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert should_recompile_managed_pipelines() is expected
-
-
-@pytest.mark.parametrize("bad_name", ["../x", "a/b", "..", "."])
-def test_staged_pipeline_yaml_path_rejects_unsafe_names(tmp_path: Path, bad_name: str) -> None:
-    """Pipeline names must be plain basenames under the staging directory."""
-    output_dir = tmp_path / "staging"
-    output_dir.mkdir()
-    with pytest.raises(ValueError, match="Invalid pipeline name|escapes output dir"):
-        staged_pipeline_yaml_path(output_dir, bad_name)
-
-
-def _write_managed_pipeline_fixture(repo: Path, *, name: str = "my_pipeline") -> Path:
-    """Create a minimal managed pipeline under ``repo/pipelines/``."""
-    pipe_dir = repo / "pipelines" / "training" / "p"
-    pipe_dir.mkdir(parents=True)
-    (pipe_dir / "pipeline.py").write_text(_VALID_PIPELINE_SRC)
-    (pipe_dir / "metadata.yaml").write_text(
-        yaml.dump({"name": name, "stability": "alpha", "managed": True}),
-        encoding="utf-8",
-    )
-    return pipe_dir
-
-
-def test_stage_managed_pipelines_writes_only_to_output_dir(tmp_path: Path) -> None:
-    """Runtime staging writes manifest and YAML under output_dir, not under repo pipelines/."""
-    repo = tmp_path / "app"
-    output_dir = tmp_path / "staging"
-    pipe_dir = _write_managed_pipeline_fixture(repo)
-
-    rc = stage_managed_pipelines(repo, output_dir)
-
-    assert rc == 0
-    manifest = output_dir / "managed-pipelines.json"
-    assert manifest.is_file()
-    entries = json.loads(manifest.read_text())
-    assert entries[0]["name"] == "my_pipeline"
-
-    staged_yaml = output_dir / "my_pipeline.yaml"
-    assert staged_yaml.is_file()
-    assert not (pipe_dir / "pipeline.yaml").exists()
-
-
-def test_stage_managed_pipelines_returns_error_when_pipelines_root_missing(tmp_path: Path) -> None:
-    """Missing pipelines/ under repo_root yields exit code 1."""
-    repo = tmp_path / "empty_app"
-    repo.mkdir()
-    output_dir = tmp_path / "staging"
-
-    rc = stage_managed_pipelines(repo, output_dir)
-
-    assert rc == 1
-    assert not (output_dir / "managed-pipelines.json").exists()
 
 
 # ---------------------------------------------------------------------------

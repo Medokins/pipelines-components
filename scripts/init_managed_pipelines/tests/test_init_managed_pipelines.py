@@ -7,11 +7,19 @@ import pytest
 
 from scripts.generate_managed_pipelines.generate_managed_pipelines import (
     OUTPUT_FILENAME,
-    RELATED_IMAGE_AUTOML_ENV,
-    RELATED_IMAGE_AUTORAG_ENV,
+    RELATED_IMAGE_ENV_PREFIX,
 )
 
 from .. import init_managed_pipelines as init_mod
+
+
+def _clear_related_image_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove all RELATED_IMAGE_* variables from the environment."""
+    import os
+
+    for key in list(os.environ):
+        if key.startswith(RELATED_IMAGE_ENV_PREFIX):
+            monkeypatch.delenv(key, raising=False)
 
 
 def _write_image_fixture(app_root: Path) -> None:
@@ -52,8 +60,7 @@ def test_main_copy_path_without_related_image(
     """Without RELATED_IMAGE env, init copies pre-built YAML from the image."""
     app_root, output_dir = staging_paths
     _write_image_fixture(app_root)
-    monkeypatch.delenv(RELATED_IMAGE_AUTOML_ENV, raising=False)
-    monkeypatch.delenv(RELATED_IMAGE_AUTORAG_ENV, raising=False)
+    _clear_related_image_env(monkeypatch)
 
     assert init_mod.main() == 0
 
@@ -71,7 +78,7 @@ def test_main_recompile_path_calls_stage_managed_pipelines(
     """With RELATED_IMAGE env, init stages via stage_managed_pipelines (not image copy)."""
     app_root, output_dir = staging_paths
     _write_image_fixture(app_root)
-    monkeypatch.setenv(RELATED_IMAGE_AUTOML_ENV, "quay.io/example/automl-runtime@sha256:aaa")
+    monkeypatch.setenv("RELATED_IMAGE_ODH_AUTOML_IMAGE", "quay.io/example/automl-runtime@sha256:aaa")
 
     calls: list[tuple[Path, Path]] = []
 
@@ -102,7 +109,7 @@ def test_main_returns_nonzero_when_stage_fails(
     """Init propagates failure from stage_managed_pipelines."""
     app_root, output_dir = staging_paths
     _write_image_fixture(app_root)
-    monkeypatch.setenv(RELATED_IMAGE_AUTOML_ENV, "quay.io/example/automl-runtime@sha256:aaa")
+    monkeypatch.setenv("RELATED_IMAGE_ODH_AUTOML_IMAGE", "quay.io/example/automl-runtime@sha256:aaa")
     monkeypatch.setattr(init_mod, "stage_managed_pipelines", lambda _repo, _out: 1)
 
     assert init_mod.main() == 1
