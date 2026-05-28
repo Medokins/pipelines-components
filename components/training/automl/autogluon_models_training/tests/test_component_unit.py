@@ -125,7 +125,6 @@ _MINIMAL_NOTEBOOK = {
 }
 
 
-
 def _mock_leaderboard_top_models(mock_predictor, names: list):
     """Make leaderboard().head(n)['model'].values.tolist() return ``names``."""
     chain = mock_predictor.leaderboard.return_value.head.return_value
@@ -474,9 +473,7 @@ class TestAutogluonModelsTrainingUnitTests:
         mock_models_artifact.metadata = {}
 
         autogluon_models_training.python_func(
-            **_base_call_kwargs(
-                workspace_path, mock_models_artifact, mock.MagicMock(path="/tmp/test.csv"), tmp_path
-            ),
+            **_base_call_kwargs(workspace_path, mock_models_artifact, mock.MagicMock(path="/tmp/test.csv"), tmp_path),
             positive_class="yes",
         )
 
@@ -740,9 +737,7 @@ class TestAutogluonModelsTrainingUnitTests:
     @mock.patch("shutil.rmtree")
     @mock.patch("pandas.read_csv")
     @mock.patch("autogluon.tabular.TabularPredictor")
-    def test_operations_called_in_correct_order(
-        self, mock_predictor_class, mock_read_csv, mock_rmtree, tmp_path
-    ):
+    def test_operations_called_in_correct_order(self, mock_predictor_class, mock_read_csv, mock_rmtree, tmp_path):
         """Verify call order for a single model: fit → clone → refit_full → Phase A (predict → evaluate → fi) → Phase B (set_model_best → clone_for_deployment) → rmtree.
 
         Phase A (metrics + notebook) runs via ThreadPoolExecutor across models, but within
@@ -815,9 +810,7 @@ class TestAutogluonModelsTrainingUnitTests:
     @mock.patch("shutil.rmtree")
     @mock.patch("pandas.read_csv")
     @mock.patch("autogluon.tabular.TabularPredictor")
-    def test_work_path_is_on_pvc_and_cleaned_up(
-        self, mock_predictor_class, mock_read_csv, mock_rmtree, tmp_path
-    ):
+    def test_work_path_is_on_pvc_and_cleaned_up(self, mock_predictor_class, mock_read_csv, mock_rmtree, tmp_path):
         """Clone work path is inside workspace_path (PVC), not inside models_artifact (S3)."""
         mock_predictor = mock.MagicMock()
         mock_predictor_clone = mock.MagicMock()
@@ -863,9 +856,7 @@ class TestAutogluonModelsTrainingUnitTests:
 
     @mock.patch("pandas.read_csv")
     @mock.patch("autogluon.tabular.TabularPredictor")
-    def test_refit_full_called_once_with_all_top_models(
-        self, mock_predictor_class, mock_read_csv, tmp_path
-    ):
+    def test_refit_full_called_once_with_all_top_models(self, mock_predictor_class, mock_read_csv, tmp_path):
         """refit_full is called exactly once with the full list of top models (batch, not per-model)."""
         top_models = ["LightGBM_BAG_L1", "CatBoost_BAG_L1", "NeuralNetFastAI_BAG_L1"]
         mock_predictor = mock.MagicMock()

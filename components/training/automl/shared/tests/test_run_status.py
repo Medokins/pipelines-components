@@ -137,8 +137,7 @@ def test_record_stage_autofills_steps_from_manifest_on_completed(tmp_path):
     assert model_selection["top_n"] == 2
     record_stage(ws, COMPONENT_DATA_LOADER, "validate_inputs", STATUS_COMPLETED)
     loader_stage = next(
-        s for s in load_run_status(ws)["components"][COMPONENT_DATA_LOADER]["stages"]
-        if s["id"] == "validate_inputs"
+        s for s in load_run_status(ws)["components"][COMPONENT_DATA_LOADER]["stages"] if s["id"] == "validate_inputs"
     )
     assert "steps" not in loader_stage
 
@@ -160,9 +159,7 @@ def test_init_and_stages(tmp_path):
     assert doc[DOCUMENT_PIPELINE_ID_FIELD] == PIPELINE_TABULAR_TRAINING
     assert doc["components"][COMPONENT_DATA_LOADER]["state"] == STATUS_COMPLETED
     assert doc["components"][COMPONENT_MODELS_TRAINING]["state"] == STATUS_PENDING
-    read_stage = next(
-        s for s in doc["components"][COMPONENT_DATA_LOADER]["stages"] if s["id"] == "read_and_sample"
-    )
+    read_stage = next(s for s in doc["components"][COMPONENT_DATA_LOADER]["stages"] if s["id"] == "read_and_sample")
     assert read_stage["rows"] == 100
 
 

@@ -158,9 +158,7 @@ def autogluon_tabular_training_pipeline(
         run_status_pipeline_id=RUN_STATUS_PIPELINE_ID,
     )
     run_status_init_task.set_caching_options(False)
-    run_status_init_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
-        "1Gi"
-    )
+    run_status_init_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
 
     data_loader_task = automl_data_loader(
         bucket_name=train_data_bucket_name,

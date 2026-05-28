@@ -25,6 +25,7 @@ After cleansing, at least **100** valid records must remain; otherwise the compo
 | `id_column` | `str` | `None` | Name of the column identifying each time series (item_id). |
 | `timestamp_column` | `str` | `None` | Name of the timestamp/datetime column. |
 | `sampled_test_dataset` | `dsl.Output[dsl.Dataset]` | `None` | Output dataset artifact for the test split. |
+| `run_status_artifact` | `dsl.Output[dsl.Artifact]` | `None` | KFP artifact with a snapshot of ``.automl/run_status.json``. |
 | `selection_train_size` | `float` | `0.3` | Fraction of train portion for model selection (default: 0.3). |
 
 ## Outputs 📤

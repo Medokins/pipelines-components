@@ -4,6 +4,7 @@ from unittest import mock
 
 import pytest
 
+
 def _make_run_status_artifact(tmp_path):
     art = mock.MagicMock()
     art.path = str(tmp_path / "run_status_artifact")
