@@ -1,9 +1,6 @@
 {
   "pipeline_id": "autogluon-tabular-training-pipeline",
   "description": "Tabular AutoGluon pipeline: load and split data, train and refit models, build leaderboard.",
-  "initial_document": {
-    "components": []
-  },
   "components": [
     {
       "id": "automl_data_loader",

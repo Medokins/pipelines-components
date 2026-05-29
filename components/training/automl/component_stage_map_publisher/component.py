@@ -52,6 +52,8 @@ def publish_component_stage_map(
         raise ValueError("run_id must be a non-empty string")
 
     stage_map = load_pipeline_run_status_manifest(pipeline_id)
+    # Legacy templates may include an empty initial_document shell; not part of the stage map.
+    stage_map.pop("initial_document", None)
     if not stage_map.get("components"):
         raise FileNotFoundError(
             f"Component stage map not found or empty for pipeline_id='{pipeline_id}'. "

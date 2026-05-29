@@ -1,9 +1,6 @@
 {
   "pipeline_id": "autogluon-timeseries-training-pipeline",
   "description": "Time series AutoGluon pipeline: load and split panel data, train and refit models, build leaderboard.",
-  "initial_document": {
-    "components": []
-  },
   "components": [
     {
       "id": "timeseries_data_loader",
