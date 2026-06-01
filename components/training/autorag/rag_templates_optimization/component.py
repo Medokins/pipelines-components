@@ -114,7 +114,7 @@ def rag_templates_optimization(
                     raise e
                 _ssl_logger.warning("Initialising OGXClient without server-side certificate verification.")
                 return OgxClient(base_url=base_url, api_key=api_key, http_client=httpx.Client(verify=False))
-
+            raise e
         return OgxClient(base_url=base_url, api_key=api_key)
 
     if not isinstance(test_data_key, str) or not test_data_key.strip() or not test_data_key.lower().endswith(".json"):
