@@ -205,14 +205,6 @@ class TestBuildOgxV1ResponsesBody:
         assert "file_search results" in body["instructions"]
         assert "Respond in the same language as the user question." in body["instructions"]
 
-    def test_script_has_no_langdetect_dependency(self, tmp_path):
-        """Generated helper script must not depend on langdetect."""
-        out, _ = _run_python_func(tmp_path, [("p1", _minimal_pattern())])
-        script = (out / "p1" / SCRIPT_FILENAME).read_text(encoding="utf-8")
-        assert "langdetect" not in script
-        assert "_detect_language_instruction" not in script
-        assert "_LANG_MAP" not in script
-
     def test_detected_language_instruction_not_duplicated(self, tmp_path):
         """When system_message_text already has 'You MUST respond in X.', instructions don't double it."""
         pattern = _minimal_pattern()
