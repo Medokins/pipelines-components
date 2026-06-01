@@ -165,6 +165,24 @@ class TestBuildOgxV1ResponsesBody:
         body = json.loads((out / "p1" / OUTPUT_FILENAME).read_text(encoding="utf-8"))
         assert "ranking_options" not in body["tools"][0]
 
+    def test_detected_language_produces_explicit_instruction(self, tmp_path):
+        """When detected_language is in the pattern, instructions use explicit language name."""
+        pattern = _minimal_pattern()
+        pattern["settings"]["generation"]["detected_language"] = {
+            "code": "ja",
+            "name": "Japanese",
+        }
+        out, _ = _run_python_func(tmp_path, [("p1", pattern)])
+        body = json.loads((out / "p1" / OUTPUT_FILENAME).read_text(encoding="utf-8"))
+        assert "You MUST respond in Japanese." in body["instructions"]
+        assert "Respond in the same language as the user question." not in body["instructions"]
+
+    def test_no_detected_language_falls_back_to_generic(self, tmp_path):
+        """Without detected_language, instructions use generic language hint."""
+        out, _ = _run_python_func(tmp_path, [("p1", _minimal_pattern())])
+        body = json.loads((out / "p1" / OUTPUT_FILENAME).read_text(encoding="utf-8"))
+        assert "Respond in the same language as the user question." in body["instructions"]
+
     def test_input_uses_placeholder_not_generation_template(self, tmp_path):
         """``input`` uses the fixed placeholder, not ``user_message_text`` template expansion."""
         pattern = _minimal_pattern()
@@ -186,6 +204,14 @@ class TestBuildOgxV1ResponsesBody:
         assert "Context section" not in body["instructions"]
         assert "file_search results" in body["instructions"]
         assert "Respond in the same language as the user question." in body["instructions"]
+
+    def test_script_includes_language_detection(self, tmp_path):
+        """Generated helper script includes langdetect-based language detection."""
+        out, _ = _run_python_func(tmp_path, [("p1", _minimal_pattern())])
+        script = (out / "p1" / SCRIPT_FILENAME).read_text(encoding="utf-8")
+        assert "_detect_language_instruction" in script
+        assert "langdetect" in script
+        assert "_LANG_MAP" in script
 
     def test_script_supports_custom_ca_bundle_and_insecure_tls(self, tmp_path):
         """Generated helper exposes CA-bundle env vars and a dev-only insecure flag.

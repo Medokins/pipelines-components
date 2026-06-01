@@ -580,6 +580,8 @@ def rag_templates_optimization(
     with open(search_space_prep_report, "r") as f:
         search_space = yml.safe_load(f)
 
+    detected_language = search_space.pop("detected_language", None)
+
     search_space = AI4RAGSearchSpace(
         params=[Parameter(param, "C", values=values) for param, values in search_space.items()]
     )
@@ -602,6 +604,32 @@ def rag_templates_optimization(
         raise ValueError("vector_io_provider_id must be a non-empty string.")
     vector_io_provider_id = vector_io_provider_id.strip()
 
+    _DEFAULT_SYSTEM_MSG = (
+        "Please answer the question I provide in the Question section below, "
+        "based solely on the information I provide in the Context section. "
+        "If the question is unanswerable, please say you cannot answer."
+    )
+    _DEFAULT_USER_MSG = (
+        "\n\nContext:\n{reference_documents}:\n\nQuestion: {question}. \n"
+        "Again, please answer the question based on the context provided only. "
+        "If the context is not related to the question, just say you cannot answer. "
+    )
+
+    if detected_language:
+        lang_name = detected_language.get("name", "")
+        if lang_name:
+            explicit_instruction = f"You MUST respond in {lang_name}."
+            sys_msg = f"{explicit_instruction} {_DEFAULT_SYSTEM_MSG}"
+            usr_msg = f"{_DEFAULT_USER_MSG}{explicit_instruction}"
+            for fm in search_space["foundation_model"].values:
+                fm.system_message_text = sys_msg
+                fm.user_message_text = usr_msg
+            _ssl_logger.info(
+                "Set explicit language instruction on %d foundation model(s): %s",
+                len(search_space["foundation_model"].values),
+                explicit_instruction,
+            )
+
     rag_exp = AI4RAGExperiment(
         client=client,
         event_handler=event_handler,
@@ -612,7 +640,6 @@ def rag_templates_optimization(
         documents=documents,
         optimization_metric=optimization_metric,
         ogx_vector_io_provider_id=vector_io_provider_id,
-        # TODO some necessary kwargs (if any at all)
     )
 
     # retrieve documents && run optimisation loop
@@ -643,6 +670,19 @@ def rag_templates_optimization(
 
     rag_patterns_dir = Path(rag_patterns.path)
     evaluation_data_list = getattr(rag_exp.results, "evaluation_data", [])
+
+    def _build_system_message(custom_text: str | None, lang: dict | None) -> str:
+        """Build system message with explicit language instruction when detected."""
+        base = custom_text if custom_text else _DEFAULT_SYSTEM_MSG
+        if not lang:
+            return base
+        lang_name = lang.get("name", "")
+        if not lang_name:
+            return base
+        instruction = f"You MUST respond in {lang_name}."
+        if instruction in base:
+            return base
+        return f"{instruction} {base}"
 
     def _build_pattern_json(evaluation_result, iteration: int, max_combinations: int) -> dict:
         """Build pattern.json with flat schema (name, iteration, settings, scores, final_score)."""
@@ -728,13 +768,11 @@ def rag_templates_optimization(
                             "the question."
                         ),
                     ),
-                    "system_message_text": generation.get(
-                        "system_message_text",
-                        (
-                            "Please answer the question I provide in the Question section below, based solely "
-                            "on the information I provide in the Context section. If unanswerable, say so."
-                        ),
+                    "system_message_text": _build_system_message(
+                        generation.get("system_message_text"),
+                        detected_language,
                     ),
+                    **({"detected_language": detected_language} if detected_language else {}),
                 },
             },
         }

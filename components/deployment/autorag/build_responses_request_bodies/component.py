@@ -121,6 +121,15 @@ def prepare_responses_api_requests(
         """Placeholder user message in the JSON; interactive script overwrites at runtime."""
         return RESPONSES_BODY_DEFAULT_QUESTION
 
+    def _explicit_language_instruction(detected_language: object) -> str:
+        """Build explicit language instruction from detected_language metadata."""
+        if not isinstance(detected_language, dict):
+            return ""
+        name = detected_language.get("name", "")
+        if not name:
+            return ""
+        return f"You MUST respond in {name}."
+
     def _language_instruction_from_user_message(user_message_text: object) -> str:
         """Extract language guidance from generation.user_message_text when present."""
         if not isinstance(user_message_text, str):
@@ -162,15 +171,20 @@ def prepare_responses_api_requests(
     def _compose_instructions(generation: dict) -> str:
         """Compose Responses API instructions from system/user generation fields."""
         system_text = _normalize_system_message_for_file_search(generation.get("system_message_text"))
-        language_hint = _language_instruction_from_user_message(generation.get("user_message_text"))
+        explicit_lang = _explicit_language_instruction(generation.get("detected_language"))
+        language_hint = explicit_lang or _language_instruction_from_user_message(generation.get("user_message_text"))
         if not system_text:
+            if explicit_lang:
+                return f"{grounding_instruction} {explicit_lang}"
             return default_instructions
 
         parts = [system_text]
         lowered = system_text.lower()
         if "file_search" not in lowered and "retriev" not in lowered:
             parts.append(grounding_instruction)
-        if language_hint:
+        if "you must respond in" in lowered:
+            pass
+        elif language_hint:
             if "same language as the user question" not in lowered and "language of the question" not in lowered:
                 parts.append(language_hint)
         elif "same language as the user question" not in lowered and "language of the question" not in lowered:
@@ -218,12 +232,74 @@ def prepare_responses_api_requests(
 import copy
 import json
 import os
+from collections import Counter
 from getpass import getpass
 from pathlib import Path
 from urllib import request
 from urllib.error import HTTPError, URLError
 import ssl
 import sys
+
+try:
+    from langdetect import detect as _langdetect_detect, LangDetectException
+    _HAS_LANGDETECT = True
+except ImportError:
+    _HAS_LANGDETECT = False
+
+_LANG_MAP = {{
+    "ja": "Japanese", "ko": "Korean", "zh-cn": "Chinese", "zh-tw": "Chinese",
+    "de": "German", "fr": "French", "es": "Spanish", "pt": "Portuguese",
+    "it": "Italian", "ru": "Russian", "ar": "Arabic", "hi": "Hindi",
+    "th": "Thai", "vi": "Vietnamese", "pl": "Polish", "nl": "Dutch",
+    "sv": "Swedish", "cs": "Czech", "tr": "Turkish",
+}}
+
+_SCRIPT_RANGES = [
+    ("ja", [(0x3040, 0x309F), (0x30A0, 0x30FF), (0x31F0, 0x31FF)]),
+    ("ko", [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)]),
+    ("zh-cn", [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x20000, 0x2A6DF)]),
+    ("ar", [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF)]),
+    ("th", [(0x0E00, 0x0E7F)]),
+    ("hi", [(0x0900, 0x097F)]),
+    ("ru", [(0x0400, 0x04FF), (0x0500, 0x052F)]),
+]
+
+
+def _detect_language_by_script(text):
+    script_counts = {{}}
+    for ch in text:
+        cp = ord(ch)
+        for lang_code, ranges in _SCRIPT_RANGES:
+            if any(lo <= cp <= hi for lo, hi in ranges):
+                script_counts[lang_code] = script_counts.get(lang_code, 0) + 1
+                break
+    if not script_counts:
+        return None
+    best = max(script_counts, key=script_counts.get)
+    if best == "zh-cn" and script_counts.get("ja", 0) > 0:
+        return "ja"
+    return best
+
+
+def _detect_language_instruction(question: str) -> str:
+    """Detect question language and return explicit instruction, or empty for English."""
+    if not question.strip():
+        return ""
+    if _HAS_LANGDETECT:
+        try:
+            code = _langdetect_detect(question)
+        except (LangDetectException, Exception):
+            code = None
+        if code and code != "en":
+            name = _LANG_MAP.get(code)
+            if name:
+                return f"You MUST respond in {{name}}."
+    code = _detect_language_by_script(question)
+    if code:
+        name = _LANG_MAP.get(code)
+        if name:
+            return f"You MUST respond in {{name}}."
+    return ""
 
 
 OGX_BASE_URL = "{base_url.rstrip("/")}"
@@ -343,6 +419,9 @@ def main() -> int:
             return 0
         body = copy.deepcopy(template)
         _set_question(body, question)
+        lang_instr = _detect_language_instruction(question)
+        if lang_instr and "instructions" in body and lang_instr not in body["instructions"]:
+            body["instructions"] = f"{{lang_instr}} {{body['instructions']}}"
         rc = _post_responses(body, api_key, ssl_context)
         if rc != 0:
             return rc
