@@ -88,6 +88,7 @@ The base_model_name parameter is needed for tokenizer resolution since the serve
 - **Owners**:
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska

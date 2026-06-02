@@ -60,6 +60,7 @@ Creates a KServe ServingRuntime + InferenceService (matching the RHOAI dashboard
 - **Owners**:
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska

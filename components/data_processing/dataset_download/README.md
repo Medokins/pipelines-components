@@ -41,6 +41,7 @@ Validates that datasets follow chat template format (messages/conversations with
   - No Parent Owners: Yes
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska

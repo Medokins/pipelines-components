@@ -56,6 +56,7 @@ Uses the upstream model artifact (input_model) produced by training, or falls ba
   - No Parent Owners: Yes
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska
