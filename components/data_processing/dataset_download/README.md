@@ -40,6 +40,7 @@ Validates that datasets follow chat template format (messages/conversations with
 - **Owners**:
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska

@@ -68,6 +68,7 @@ Prerequisites: Eval Hub and KServe must be installed on the cluster. The pipelin
 - **Owners**:
   - Approvers:
     - briangallagher
+    - efazal
     - Fiona-Waters
     - kramaranya
     - MStokluska
