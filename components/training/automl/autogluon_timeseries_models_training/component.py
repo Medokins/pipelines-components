@@ -348,6 +348,7 @@ def autogluon_timeseries_models_training(
 
                 from kfp_components.components.training.automl.shared.back_testing import build_back_testing_json
 
+                back_testing_available = False
                 try:
                     back_testing_payload = build_back_testing_json(
                         predictor_refit,
@@ -363,6 +364,7 @@ def autogluon_timeseries_models_training(
                     )
                     with (metrics_path / "back_testing.json").open("w", encoding="utf-8") as f:
                         json.dump(back_testing_payload, f, indent=2)
+                    back_testing_available = True
                 except Exception as backtest_exc:
                     logger.warning(
                         "Could not generate back_testing.json for model %r: %s. Skipping backtest artifact.",
@@ -389,15 +391,19 @@ def autogluon_timeseries_models_training(
                 with (notebook_path / "automl_predictor_notebook.ipynb").open("w", encoding="utf-8") as f:
                     json.dump(notebook, f)
 
+                model_location = {
+                    "model_directory": model_name_full,
+                    "predictor": str(Path(model_name_full) / "predictor"),
+                    "notebook": str(Path(model_name_full) / "notebooks" / "automl_predictor_notebook.ipynb"),
+                    "metrics": str(Path(model_name_full) / "metrics"),
+                }
+                # Only include back_testing path if file was successfully written
+                if back_testing_available:
+                    model_location["back_testing"] = str(Path(model_name_full) / "metrics" / "back_testing.json")
+
                 model_metadata = {
                     "name": model_name_full,
-                    "location": {
-                        "model_directory": model_name_full,
-                        "predictor": str(Path(model_name_full) / "predictor"),
-                        "notebook": str(Path(model_name_full) / "notebooks" / "automl_predictor_notebook.ipynb"),
-                        "metrics": str(Path(model_name_full) / "metrics"),
-                        "back_testing": str(Path(model_name_full) / "metrics" / "back_testing.json"),
-                    },
+                    "location": model_location,
                     "metrics": {
                         "test_data": metrics_dict,
                     },

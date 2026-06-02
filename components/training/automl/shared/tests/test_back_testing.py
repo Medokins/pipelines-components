@@ -37,7 +37,18 @@ class TestSerialization:
 
     def test_filter_finite_metrics_drops_nan(self):
         """Non-finite metric values are omitted."""
-        assert filter_finite_metrics({"MASE": 0.5, "MAPE": float("nan"), "RMSE": float("inf")}) == {"MASE": 0.5}
+        # AutoGluon negates error metrics, so MASE=-0.5 becomes 0.5
+        assert filter_finite_metrics({"MASE": -0.5, "MAPE": float("nan"), "RMSE": float("inf")}) == {"MASE": 0.5}
+
+    def test_filter_finite_metrics_normalizes_autogluon_signs(self):
+        """Error metrics are converted from AutoGluon's negative 'higher-is-better' to positive natural form."""
+        # AutoGluon .evaluate() returns negated error metrics (higher-is-better convention)
+        autogluon_output = {"MASE": -0.42, "MAPE": -5.0, "RMSE": -10.5, "MAE": -3.2}
+        # After normalization, error metrics should be positive
+        normalized = filter_finite_metrics(autogluon_output)
+        assert normalized == {"MASE": 0.42, "MAPE": 5.0, "RMSE": 10.5, "MAE": 3.2}
+        # All values positive (natural error form)
+        assert all(v > 0 for v in normalized.values())
 
     def test_serialize_timestamp_utc(self):
         """Timestamps serialize to ISO strings with UTC suffix."""
@@ -188,7 +199,8 @@ class TestBuildBackTestingJson:
 
         def mock_evaluate(**kwargs):
             cutoff_calls.append(kwargs.get("cutoff"))
-            return {"MASE": 0.5}
+            # AutoGluon returns negated error metrics (higher-is-better convention)
+            return {"MASE": -0.5}
 
         predictor.evaluate.side_effect = mock_evaluate
 
@@ -221,7 +233,8 @@ class TestBuildBackTestingJson:
         predictor = mock.MagicMock()
         predictor.backtest_predictions.return_value = [predictions]
         predictor.backtest_targets.return_value = [window_targets]
-        predictor.evaluate.return_value = {"MASE": 0.42, "MAPE": 5.0}
+        # AutoGluon returns negated error metrics (higher-is-better convention)
+        predictor.evaluate.return_value = {"MASE": -0.42, "MAPE": -5.0}
 
         payload = build_back_testing_json(
             predictor,
@@ -262,7 +275,8 @@ class TestBuildBackTestingJson:
         predictor = mock.MagicMock()
         predictor.backtest_predictions.return_value = [predictions]
         predictor.backtest_targets.return_value = [window_targets]
-        predictor.evaluate.return_value = {"RMSE": 1.0}
+        # AutoGluon returns negated error metrics (higher-is-better convention)
+        predictor.evaluate.return_value = {"RMSE": -1.0}
 
         payload = build_back_testing_json(
             predictor,
@@ -316,7 +330,8 @@ class TestBuildBackTestingJson:
         predictor = mock.MagicMock()
         predictor.backtest_predictions.return_value = [predictions]
         predictor.backtest_targets.return_value = [window_targets]
-        predictor.evaluate.return_value = {"MASE": 0.5, "MAPE": 2.0}
+        # AutoGluon returns negated error metrics (higher-is-better convention)
+        predictor.evaluate.return_value = {"MASE": -0.5, "MAPE": -2.0}
 
         payload = build_back_testing_json(
             predictor,

@@ -54,12 +54,25 @@ def to_finite_float(value: Any) -> float | None:
 
 
 def filter_finite_metrics(metrics: dict[str, Any]) -> dict[str, float]:
-    """Keep only finite scalar metric values (KFP-safe)."""
+    """Keep only finite scalar metric values (KFP-safe).
+
+    Normalizes AutoGluon's "higher-is-better" convention by converting error metrics
+    back to their natural positive form. AutoGluon negates error metrics like MAPE/RMSE/MAE
+    in .evaluate() output, so this function multiplies them by -1 to restore standard signs.
+    """
     cleaned: dict[str, float] = {}
     for key, value in metrics.items():
         number = to_finite_float(value)
         if number is not None:
-            cleaned[key] = number
+            # AutoGluon negates error metrics for "higher is better" convention.
+            # Convert back to natural form: MAPE/RMSE/etc should be positive.
+            metric_normalized = (key or "").strip().lstrip("-").upper()
+            if metric_normalized in _LOWER_IS_BETTER:
+                # This metric is naturally "lower is better", so AutoGluon negated it.
+                # Multiply by -1 to restore positive error values.
+                cleaned[key] = -number
+            else:
+                cleaned[key] = number
     return cleaned
 
 
