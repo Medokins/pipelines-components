@@ -111,6 +111,7 @@ def example_pipeline(
   - model-selection
 - **Last Verified**: 2026-05-27 12:00:00+00:00
 - **Owners**:
+  - No Parent Owners: Yes
   - Approvers:
     - LukaszCmielowski
     - DorotaDR

@@ -85,6 +85,7 @@ def example_pipeline(
   - automl
 - **Last Verified**: 2026-03-06 11:05:29+00:00
 - **Owners**:
+  - No Parent Owners: Yes
   - Approvers:
     - LukaszCmielowski
     - DorotaDR
