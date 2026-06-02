@@ -13,6 +13,10 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_VAL_WINDOWS = 3
+# Limit forecast points per window to control JSON artifact size.
+# At 500 points: ~21 days (hourly data), ~1.4 years (daily data), ~8 hours (minute data).
+# For longer horizons, downstream consumers (UI, notebooks) should aggregate or paginate.
+# This prevents multi-MB JSON files that would slow down KFP artifact rendering.
 MAX_FORECAST_POINTS_PER_WINDOW = 500
 # Point-forecast metrics computed per series; used internally for best/worst selection.
 _SERIES_POINT_METRICS = frozenset({"MAPE", "RMSE", "MAE"})
@@ -105,6 +109,22 @@ def _mean_prediction_column(predictions: pd.DataFrame) -> str:
 
 
 def _quantile_bounds(predictions: pd.DataFrame) -> tuple[str | None, str | None]:
+    """Extract lower/upper quantile columns for uncertainty visualization.
+
+    Selects the first quantile <= 0.2 for lower bound and >= 0.8 for upper bound.
+    These thresholds provide a ~60% coverage interval suitable for chart rendering
+    without overwhelming the visualization with too many bands.
+
+    AutoGluon typically generates quantiles at [0.1, 0.2, ..., 0.9]. If present,
+    this function will select 0.2 and 0.8. If AutoGluon uses different levels
+    (e.g., 0.1/0.9), the function adapts by picking the closest match.
+
+    Args:
+        predictions: Forecast DataFrame with quantile columns (numeric names like "0.1")
+
+    Returns:
+        Tuple of (lower_quantile_column, upper_quantile_column) as strings, or None if not found
+    """
     lower = None
     upper = None
     for col in predictions.columns:
@@ -141,7 +161,7 @@ def _holdout_frame(tsdf: pd.DataFrame, prediction_length: int) -> pd.DataFrame:
     return pd.concat(parts, keys=[i for i in _item_ids(tsdf)], names=tsdf.index.names)
 
 
-def _window_date_bounds(targets_window: pd.DataFrame, prediction_length: int, target: str) -> tuple[str, str]:
+def _window_date_bounds(targets_window: pd.DataFrame, prediction_length: int) -> tuple[str, str]:
     holdout = _holdout_frame(targets_window, prediction_length)
     timestamps = holdout.index.get_level_values(-1) if isinstance(holdout.index, pd.MultiIndex) else holdout.index
     timestamps = pd.to_datetime(timestamps, errors="coerce").dropna()
@@ -176,7 +196,9 @@ def _forecast_data_for_item(
     lower_col, upper_col = _quantile_bounds(pred_item)
 
     rows: list[dict[str, Any]] = []
-    for ts in pred_item.index[:MAX_FORECAST_POINTS_PER_WINDOW]:
+    for ts in target_item.index[:MAX_FORECAST_POINTS_PER_WINDOW]:
+        if ts not in pred_item.index:
+            continue
         predicted = to_finite_float(pred_item.loc[ts, pred_col])
         if predicted is None:
             continue
@@ -249,11 +271,34 @@ def _normalize_metric_name(metric: str) -> str:
     return (metric or "").strip().lstrip("-").upper()
 
 
-def _series_ranking_metric(eval_metric: str) -> str:
-    """Metric used to rank best/worst series (internal; not serialized)."""
+def _series_ranking_metric(eval_metric: str, series_averages: dict[Any, dict[str, float]]) -> str:
+    """Select ranking metric with fallback when primary metric unavailable.
+
+    Args:
+        eval_metric: Desired evaluation metric from component config
+        series_averages: Per-series averaged metrics (used to check availability)
+
+    Returns:
+        Metric name to use for ranking (MAPE, RMSE, or MAE)
+
+    Falls back through: eval_metric → MAPE → RMSE → MAE if metrics can't be computed.
+    This handles cases where MAPE fails due to zero denominators.
+    """
+    # Collect all available metrics across all series
+    available_metrics: set[str] = set()
+    for metrics in series_averages.values():
+        available_metrics.update(metrics.keys())
+
     normalized = _normalize_metric_name(eval_metric)
-    if normalized in _SERIES_POINT_METRICS:
+    if normalized in _SERIES_POINT_METRICS and normalized in available_metrics:
         return normalized
+
+    # Fallback chain: MAPE → RMSE → MAE
+    for fallback in ["MAPE", "RMSE", "MAE"]:
+        if fallback in available_metrics:
+            return fallback
+
+    # Last resort: return MAPE even if not available (will sort to infinity)
     return _DEFAULT_SERIES_RANKING_METRIC
 
 
@@ -300,11 +345,11 @@ def _build_series_analysis(
         for item_id, metrics_list in per_item_window_metrics.items()
         if metrics_list
     }
-    ranking_metric = _series_ranking_metric(eval_metric)
+    ranking_metric = _series_ranking_metric(eval_metric, series_averages)
     best_id, worst_id = _select_best_worst(series_averages, ranking_metric)
 
     def _series_payload(item_id: Any | None) -> dict[str, Any] | None:
-        if item_id is None:
+        if item_id not in series_averages:
             return None
         windows_payload = []
         for window_id, (predictions, targets_window) in enumerate(
@@ -374,6 +419,11 @@ def build_back_testing_json(
     metric_names = metrics or [eval_metric]
     per_window_metrics: list[dict[str, Any]] = []
     num_windows = len(predictions_windows)
+    # Generate cutoff points for each validation window.
+    # AutoGluon's cutoff parameter is a negative integer indicating where evaluation starts:
+    # cutoff=-N means evaluate from the -N-th to the (-N + prediction_length)-th time step.
+    # For num_val_windows=3 and prediction_length=2, this generates [-6, -4, -2],
+    # evaluating: window 0: steps -6 to -4, window 1: steps -4 to -2, window 2: steps -2 to end.
     cutoffs = range(-num_windows * prediction_length, 0, prediction_length)
     for window_id, cutoff in enumerate(cutoffs):
         evaluate_kwargs: dict[str, Any] = {
@@ -389,7 +439,7 @@ def build_back_testing_json(
             window_scores = {}
         test_start, test_end = "", ""
         if window_id < len(targets_windows):
-            test_start, test_end = _window_date_bounds(targets_windows[window_id], prediction_length, target)
+            test_start, test_end = _window_date_bounds(targets_windows[window_id], prediction_length)
         per_window_metrics.append(
             {
                 "window_id": window_id,
