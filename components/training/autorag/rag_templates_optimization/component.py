@@ -106,14 +106,7 @@ def rag_templates_optimization(
         except httpx.ConnectError as e:
             if search(r"\bself.*signed.*certificate\b", str(e)):
                 _ssl_logger.info("OGX server presents a self-signed certificate")
-                if httpx.get(base_url, verify=False).status_code != 200:
-                    _ssl_logger.error(
-                        "Cannot establish connection with the OGX server even without "
-                        "verification of the self-signed certificate.",
-                        exc_info=True,
-                    )
-                    raise e
-                _ssl_logger.warning("Initialising OGXClient without server-side certificate verification.")
+                _ssl_logger.info("Initialising OGXClient without server-side certificate verification.")
                 return OgxClient(base_url=base_url, api_key=api_key, http_client=httpx.Client(verify=False))
             raise e
         return OgxClient(base_url=base_url, api_key=api_key)
