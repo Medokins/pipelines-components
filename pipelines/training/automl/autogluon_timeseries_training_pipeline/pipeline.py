@@ -106,8 +106,8 @@ def autogluon_timeseries_training_pipeline(
         top_n: Number of top models to select for the leaderboard and output (default: 3).
         eval_metric: Metric for model ranking in acronym (e.g. ``"MASE"``, ``"WQL"``) or
             snake_case form. Defaults to ``"MASE"``.
-        preset: AutoGluon quality tier (default: ``"fast_training"``). ``"medium_quality"``
-            trains stronger models at higher resource cost (8 vCPU / 32 GiB).
+        preset: AutoGluon quality tier. ``"fast_training"`` (default, 4 vCPU / 16 GiB) or
+            ``"medium_quality"`` (8 vCPU / 32 GiB) for stronger models at higher resource cost.
 
     Returns:
         This pipeline wires task outputs between components; compiled runs expose the combined models artifact

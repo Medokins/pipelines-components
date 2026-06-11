@@ -300,11 +300,12 @@ class TestAutogluonModelsTrainingUnitTests:
         )
         fit_call = mock_predictor_class.return_value.fit.call_args
         assert fit_call[1]["train_data"] is mock_train_df
-        assert fit_call[1]["presets"] == "medium_quality"
-        assert fit_call[1]["use_bag_holdout"] is True
-        assert fit_call[1]["holdout_frac"] == 0.2
-        assert fit_call[1]["time_limit"] == 1800
-        assert "hyperparameters" in fit_call[1]
+        assert fit_call[1]["presets"] == "good_quality"
+        assert fit_call[1]["time_limit"] == 3600
+        assert fit_call[1]["refit_full"] is False
+        assert fit_call[1]["set_best_to_refit_full"] is False
+        assert fit_call[1]["save_bag_folds"] is True
+        assert "hyperparameters" not in fit_call[1]
 
         # read_csv: train, test, extra
         assert mock_read_csv.call_count == 3
@@ -392,7 +393,7 @@ class TestAutogluonModelsTrainingUnitTests:
     @mock.patch("pandas.read_csv")
     @mock.patch("autogluon.tabular.TabularPredictor")
     def test_good_quality_preset_fit_args(self, mock_predictor_class, mock_read_csv, tmp_path):
-        """good_quality preset uses 60-min time limit and specific fit args (no hyperparams override)."""
+        """good_quality preset uses 1-hour time limit and the same fit args as all presets."""
         mock_predictor = mock.MagicMock()
         mock_predictor_clone = mock.MagicMock()
         mock_predictor_class.return_value.fit.return_value = mock_predictor

@@ -60,7 +60,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
         params = set(inputs.keys())
         assert params == expected_params, f"Pipeline params {params} != expected {expected_params}"
         assert inputs["top_n"].default == 3
-        assert inputs["preset"].default == "medium_quality"
+        assert inputs["preset"].default == "good_quality"
         assert inputs["eval_metric"].default == ""
 
     def test_compiled_pipeline_has_expected_inputs(self):

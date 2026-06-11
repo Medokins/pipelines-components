@@ -95,7 +95,8 @@ def autogluon_models_training(
     from autogluon.tabular import TabularPredictor
 
     VALID_TASK_TYPES = {"binary", "multiclass", "regression"}
-    VALID_PRESETS = {"medium_quality", "good_quality"}
+    VALID_PRESETS = {"good_quality", "high_quality"}
+    PRESET_TIME_LIMITS = {"good_quality": 60 * 60, "high_quality": 2 * 60 * 60}
     TOP_N_MAX = 10
 
     # Input parameters validation
@@ -229,17 +230,9 @@ def autogluon_models_training(
                 "classes ['abc', 'def'] -> positive_class='def')."
             )
 
-        VALID_PRESETS = {"good_quality", "high_quality"}
-        PRESET_TIME_LIMITS = {
-            "good_quality": 45 * 60,  # 45 minutes
-            "high_quality": 90 * 60,  # 90 minutes
-        }
-        if preset not in VALID_PRESETS:
-            raise ValueError(f"preset must be one of {VALID_PRESETS}; got {preset!r}.")
+        status.record("model_selection", "started")
         time_limit = PRESET_TIME_LIMITS[preset]
-
-        predictor = TabularPredictor(**predictor_init_kwargs)
-        predictor = predictor.fit(
+        predictor = TabularPredictor(**predictor_init_kwargs).fit(
             train_data=train_data_df,
             presets=preset,
             # Pipeline handles refit explicitly via refit_full(); disable AutoGluon's built-in refit
@@ -250,8 +243,6 @@ def autogluon_models_training(
             save_bag_folds=True,
             time_limit=time_limit,
         )
-
-        status.record("model_selection", "started")
 
         # Select top N models
         leaderboard = predictor.leaderboard(test_data_df)
