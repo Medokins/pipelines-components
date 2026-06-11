@@ -23,7 +23,7 @@ def autogluon_models_training(
     split_config: Optional[dict] = None,
     extra_train_data_path: str = "",
     positive_class: str = "",
-    preset: str = "medium_quality",
+    preset: str = "good_quality",
     eval_metric: str = "",
 ) -> NamedTuple("outputs", eval_metric=str):
     """Train AutoGluon models, select the top N, and refit each on the full dataset.
@@ -63,7 +63,8 @@ def autogluon_models_training(
             (e.g. ``"1"`` or ``"yes"``). Passed to ``TabularPredictor`` when set.
             Empty string (default) lets AutoGluon infer the positive class when ``fit`` runs.
             Ignored for ``multiclass`` and ``regression``.
-        preset: AutoGluon quality tier. ``"medium_quality"`` (default, 30 min) or ``"good_quality"`` (60 min).
+        preset: AutoGluon quality tier. ``"good_quality"`` (default, 1-hour time limit) or
+            ``"high_quality"`` (2-hour time limit).
         eval_metric: Metric for model ranking (e.g. ``"r2"``, ``"accuracy"``). Defaults
             to ``"r2"`` for regression and ``"accuracy"`` otherwise.
 
@@ -228,40 +229,29 @@ def autogluon_models_training(
                 "classes ['abc', 'def'] -> positive_class='def')."
             )
 
-        status.record("model_selection", "started")
+        VALID_PRESETS = {"good_quality", "high_quality"}
+        PRESET_TIME_LIMITS = {
+            "good_quality": 45 * 60,  # 45 minutes
+            "high_quality": 90 * 60,  # 90 minutes
+        }
+        if preset not in VALID_PRESETS:
+            raise ValueError(f"preset must be one of {VALID_PRESETS}; got {preset!r}.")
+        time_limit = PRESET_TIME_LIMITS[preset]
+
         predictor = TabularPredictor(**predictor_init_kwargs)
-        if preset == "good_quality":
-            time_limit = 60 * 60  # 60 minutes - extend for good_quality
-            predictor = predictor.fit(
-                train_data=train_data_df,
-                presets=preset,
-                # Pipeline handles refit explicitly via refit_full(); disable AutoGluon's built-in refit
-                # to prevent double-refit and incorrect model selection.
-                refit_full=False,
-                set_best_to_refit_full=False,
-                # Required so refit_full() can access bag fold models after fit().
-                save_bag_folds=True,
-                time_limit=time_limit,
-            )
-        else:
-            import copy
+        predictor = predictor.fit(
+            train_data=train_data_df,
+            presets=preset,
+            # Pipeline handles refit explicitly via refit_full(); disable AutoGluon's built-in refit
+            # to prevent double-refit and incorrect model selection.
+            refit_full=False,
+            set_best_to_refit_full=False,
+            # Required so refit_full() can access bag fold models after fit().
+            save_bag_folds=True,
+            time_limit=time_limit,
+        )
 
-            from autogluon.tabular.configs.hyperparameter_configs import get_hyperparameter_config
-
-            time_limit = 30 * 60  # 30 minutes
-            RF_XT_MAX_DEPTH = 10
-            hyperparams = copy.deepcopy(get_hyperparameter_config("default"))
-            for model_type in ("RF", "XT"):
-                for config in hyperparams.get(model_type, []):
-                    config["max_depth"] = RF_XT_MAX_DEPTH
-            predictor = predictor.fit(
-                train_data=train_data_df,
-                use_bag_holdout=True,
-                holdout_frac=0.2,
-                time_limit=time_limit,
-                presets=preset,
-                hyperparameters=hyperparams,
-            )
+        status.record("model_selection", "started")
 
         # Select top N models
         leaderboard = predictor.leaderboard(test_data_df)

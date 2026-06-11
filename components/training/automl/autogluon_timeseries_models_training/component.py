@@ -90,7 +90,7 @@ def autogluon_timeseries_models_training(
     with status:
         TOP_N_MAX = 7
         VALID_PRESETS = {"fast_training", "medium_quality"}
-        time_limit = 3600 if preset == "medium_quality" else 600
+        time_limit = 60 * 60 if preset == "medium_quality" else 10 * 60
 
         # Input validation
         if preset not in VALID_PRESETS:

@@ -41,7 +41,7 @@ def autogluon_tabular_training_pipeline(
     top_n: int = 3,
     positive_class: str = "",
     eval_metric: str = "",
-    preset: str = "medium_quality",
+    preset: str = "good_quality",
 ):
     """AutoGluon Tabular Training Pipeline.
 
@@ -125,7 +125,7 @@ def autogluon_tabular_training_pipeline(
         top_n: Number of top models to select and refit (default: 3); positive integer from range [1, 10].
         positive_class: Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values.
         eval_metric: Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification.
-        preset: AutoGluon quality tier (default: "medium_quality", 4 vCPU / 16 GiB). "good_quality" trains stronger models at higher resource cost (8 vCPU / 32 GiB).
+        preset: AutoGluon quality tier. "good_quality" (default, 1 hour time limit) or "high_quality" (90 min time limit).
 
     Returns:
         HTML artifact with leaderboard of refitted models ranked by task_type metric (e.g. accuracy, r2).

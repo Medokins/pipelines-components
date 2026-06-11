@@ -31,7 +31,7 @@ mutates predictor state. All artifacts are written under a single output artifac
 | `split_config` | `Optional[dict]` | `None` | Data split config stored in artifact metadata. |
 | `extra_train_data_path` | `str` | `""` | Optional path to extra training CSV passed to ``refit_full``. |
 | `positive_class` | `str` | `""` | Label value for the positive class in **binary** classification (e.g. ``"1"`` or ``"yes"``). Passed to ``TabularPredictor`` when set. Empty string (default) lets AutoGluon infer the positive class when ``fit`` runs. Ignored for ``multiclass`` and ``regression``. |
-| `preset` | `str` | `medium_quality` | AutoGluon quality tier. ``"medium_quality"`` (default, 30 min) or ``"good_quality"`` (60 min). |
+| `preset` | `str` | `good_quality` | AutoGluon quality tier. ``"good_quality"`` (default, 1-hour time limit) or ``"high_quality"`` (2-hour time limit). |
 | `eval_metric` | `str` | `""` | Metric for model ranking (e.g. ``"r2"``, ``"accuracy"``). Defaults to ``"r2"`` for regression and ``"accuracy"`` otherwise. |
 
 ## Outputs 📤
