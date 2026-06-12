@@ -48,9 +48,7 @@ def load_pipeline_run_status_manifest(
     """
     # Type validation FIRST
     if not isinstance(pipeline_id, str):
-        raise TypeError(
-            f"pipeline_id must be a string, got {type(pipeline_id).__name__}"
-        )
+        raise TypeError(f"pipeline_id must be a string, got {type(pipeline_id).__name__}")
 
     # Content validation SECOND
     if not pipeline_id.strip():
