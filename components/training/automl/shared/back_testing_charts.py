@@ -173,11 +173,35 @@ def _show_per_window_metrics(
 
 
 def _style_date_axis(ax: Any) -> None:
-    plt, mdates = _matplotlib()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=8))
+    """Rotate x labels to reduce overlap; keep matplotlib's default date formatting."""
+    plt, _ = _matplotlib()
     ax.tick_params(axis="x", labelsize=8, rotation=45)
     plt.setp(ax.get_xticklabels(), ha="right")
+
+
+def _resolve_cutoff_timestamp(cutoff_start: str | None, timestamps: pd.Series) -> pd.Timestamp | None:
+    """Map a window ``test_start`` bound onto plotted timestamps.
+
+    ``test_start`` is stored as YYYY-MM-DD for compact tables; for hourly (or sub-daily)
+    data that resolves to midnight and can sit left of the first plotted point.
+    """
+    if timestamps.empty:
+        return pd.to_datetime(cutoff_start, utc=True) if cutoff_start else None
+
+    first_ts = pd.Timestamp(timestamps.min())
+    if first_ts.tzinfo is not None:
+        first_ts = first_ts.tz_convert("UTC").tz_localize(None)
+
+    if not cutoff_start:
+        return first_ts
+
+    cutoff = pd.to_datetime(cutoff_start, utc=True)
+    if cutoff.tzinfo is not None:
+        cutoff = cutoff.tz_convert("UTC").tz_localize(None)
+
+    if cutoff.normalize() == cutoff and cutoff < first_ts:
+        return first_ts
+    return cutoff
 
 
 def _target_column_name(data: pd.DataFrame) -> str:
@@ -284,10 +308,16 @@ def _interval_label(frame: pd.DataFrame) -> str:
     return "10%-90% interval"
 
 
-def _draw_cutoff(ax: Any, cutoff_start: str | None) -> None:
-    if not cutoff_start:
+def _draw_cutoff(ax: Any, cutoff_start: str | None, timestamps: pd.Series | None = None) -> None:
+    if timestamps is not None:
+        cutoff = _resolve_cutoff_timestamp(cutoff_start, timestamps)
+    elif cutoff_start:
+        cutoff = pd.to_datetime(cutoff_start)
+    else:
         return
-    ax.axvline(pd.to_datetime(cutoff_start), color=_CUTOFF, linestyle="--", alpha=0.7, label="Cutoff")
+    if cutoff is None:
+        return
+    ax.axvline(cutoff, color=_CUTOFF, linestyle="--", alpha=0.7, label="Cutoff")
 
 
 def _draw_forecast(
@@ -312,7 +342,7 @@ def _draw_forecast(
         if lower.notna().any() and upper.notna().any():
             ax.fill_between(timestamps, lower, upper, alpha=0.1, color=_ACCENT, label=_interval_label(frame))
 
-    _draw_cutoff(ax, cutoff_start)
+    _draw_cutoff(ax, cutoff_start, timestamps)
 
     ax.set(title=title, xlabel="Date", ylabel=target)
     ax.legend(loc="best", fontsize=8)

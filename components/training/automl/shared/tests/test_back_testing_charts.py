@@ -137,6 +137,40 @@ class TestBackTestingCharts:
         assert any(line.get_linestyle() == "--" for line in axis.lines)
         plt.close(figure)
 
+    def test_draw_forecast_cutoff_aligns_with_hourly_timestamps(self):
+        """Date-only test_start aligns to the first hourly forecast point."""
+        pytest.importorskip("matplotlib")
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        hourly_rows = [
+            {
+                "timestamp": "2025-01-03T14:00:00Z",
+                "actual": 100.0,
+                "predicted": 105.0,
+            },
+            {
+                "timestamp": "2025-01-03T15:00:00Z",
+                "actual": 110.0,
+                "predicted": 108.0,
+            },
+        ]
+        figure, axis = plt.subplots()
+        _draw_forecast(
+            axis,
+            hourly_rows,
+            title="Window 0",
+            target="sales",
+            cutoff_start="2025-01-03",
+        )
+        cutoff_lines = [line for line in axis.lines if line.get_linestyle() == "--" and line.get_color() in {"gray", "0.5"}]
+        assert cutoff_lines
+        cutoff_ts = pd.Timestamp(cutoff_lines[0].get_xdata()[0], tz="UTC").tz_convert(None)
+        assert cutoff_ts == pd.Timestamp("2025-01-03 14:00:00")
+        plt.close(figure)
+
     def test_pick_window_metric_prefers_eval_metric(self):
         """Metric lookup matches normalized eval metric names."""
         metrics = {"MASE": 0.42, "MAPE": 5.0}
@@ -304,9 +338,6 @@ class TestBackTestingCharts:
 
         assert captured
         axis = captured[0].axes[0]
-        from matplotlib.dates import DateFormatter
-
-        assert isinstance(axis.xaxis.get_major_formatter(), DateFormatter)
         labels = [label.get_rotation() for label in axis.get_xticklabels()]
         assert labels and labels[0] == 45
 
