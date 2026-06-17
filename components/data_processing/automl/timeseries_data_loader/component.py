@@ -61,6 +61,7 @@ def timeseries_data_loader(
         NamedTuple: sample_config, split_config, sample_rows, models_selection_train_data_path, extra_train_data_path.
     """
     import io
+    import json
     import logging
     import os
     from pathlib import Path
@@ -421,8 +422,19 @@ def timeseries_data_loader(
             "selection_train_size": selection_train_size,
         }
 
-        # Sample row for downstream use (JSON string to avoid NaN issues)
-        sample_rows = test_df.tail(min(5, len(test_df))).to_json(orient="records")
+        status.record("write_outputs", "started")
+        status.record("write_outputs", "completed")
+
+        # Sample rows for downstream use (ISO timestamps when supported; JSON string to avoid NaN issues)
+        sample_tail = test_df.tail(min(5, len(test_df)))
+        if hasattr(sample_tail, "to_dict"):
+            from kfp_components.components.training.automl.shared.timeseries_notebook_utils import (
+                _json_records,
+            )
+
+            sample_rows = json.dumps(_json_records(sample_tail))
+        else:
+            sample_rows = sample_tail.to_json(orient="records")
 
         return NamedTuple(
             "outputs",
