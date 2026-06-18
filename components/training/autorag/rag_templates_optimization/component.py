@@ -431,9 +431,9 @@ def rag_templates_optimization(
         mapping["EMBEDDING_PARAMS"] = em.get("embedding_params", {"embedding_dimension": 768})
         mapping["DISTANCE_METRIC"] = em.get("distance_metric", "")
 
-        vs = settings.get("vector_store", {})
-        mapping["PROVIDER_ID"] = vs.get("datasource_type", "")
-        mapping["COLLECTION_NAME"] = vs.get("collection_name", "")
+        vs_binding = settings.get("vector_store_binding") or {}
+        mapping["PROVIDER_ID"] = vs_binding.get("provider_id", "")
+        mapping["COLLECTION_NAME"] = vs_binding.get("vector_store_id", "")
 
         ret = settings.get("retrieval", {})
         mapping["RETRIEVAL_METHOD"] = ret.get("method", "")
