@@ -93,6 +93,7 @@ packages = [
     "kfp_components.components.training.automl.autogluon_leaderboard_evaluation",
     "kfp_components.components.training.automl.autogluon_models_training",
     "kfp_components.components.training.automl.autogluon_timeseries_models_training",
+    "kfp_components.components.training.automl.automl_mlflow_logger",
     "kfp_components.components.training.automl.component_stage_map_publisher",
     "kfp_components.components.training.automl.shared",
     "kfp_components.components.training.autorag",

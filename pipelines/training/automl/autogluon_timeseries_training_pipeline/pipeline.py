@@ -6,6 +6,7 @@ from kfp_components.components.training.automl.autogluon_leaderboard_evaluation 
 from kfp_components.components.training.automl.autogluon_timeseries_models_training import (
     autogluon_timeseries_models_training,
 )
+from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
 
 MAX_CPUS = "32"
@@ -208,6 +209,22 @@ def autogluon_timeseries_training_pipeline(
             MAX_MEMORY
         )
 
+        mlflow_logger_task_bl = automl_mlflow_logger(
+            models_artifact=training_task_bl.outputs["models_artifact"],
+            html_artifact=leaderboard_task_bl.outputs["html_artifact"],
+            eval_metric=training_task_bl.outputs["eval_metric"],
+            pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
+            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+            task_type="time_series",
+            preset=preset,
+            top_n=top_n,
+        )
+        mlflow_logger_task_bl.after(leaderboard_task_bl)
+        mlflow_logger_task_bl.set_caching_options(False)
+        mlflow_logger_task_bl.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
+            "1Gi"
+        )
+
     with dsl.Else():
         training_task_sp = autogluon_timeseries_models_training(**_training_kwargs)
         training_task_sp.set_caching_options(False)
@@ -222,6 +239,22 @@ def autogluon_timeseries_training_pipeline(
         leaderboard_task_sp.set_caching_options(False)
         leaderboard_task_sp.set_cpu_request("1").set_memory_request("4Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
+        )
+
+        mlflow_logger_task_sp = automl_mlflow_logger(
+            models_artifact=training_task_sp.outputs["models_artifact"],
+            html_artifact=leaderboard_task_sp.outputs["html_artifact"],
+            eval_metric=training_task_sp.outputs["eval_metric"],
+            pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
+            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+            task_type="time_series",
+            preset=preset,
+            top_n=top_n,
+        )
+        mlflow_logger_task_sp.after(leaderboard_task_sp)
+        mlflow_logger_task_sp.set_caching_options(False)
+        mlflow_logger_task_sp.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
+            "1Gi"
         )
 
 

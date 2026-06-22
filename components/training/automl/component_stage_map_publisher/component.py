@@ -15,6 +15,7 @@ def publish_component_stage_map(
     pipeline_id: str,
     run_id: str,
     component_stage_map: dsl.Output[dsl.Artifact],
+    mlflow_tracking_artifact: dsl.Output[dsl.Artifact],
 ) -> None:
     """Publish the component-to-stage-to-step map for dashboard consumption.
 
@@ -27,6 +28,7 @@ def publish_component_stage_map(
             (e.g. ``autogluon-tabular-training-pipeline``).
         run_id: KFP run ID for tracking (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``).
         component_stage_map: Output artifact containing the component-to-stage-to-step map.
+        mlflow_tracking_artifact: Output artifact with MLflow experiment/run IDs for dashboard deep-links.
 
     Raises:
         FileNotFoundError: If the template for ``pipeline_id`` is missing or empty.
@@ -42,6 +44,10 @@ def publish_component_stage_map(
     from datetime import UTC, datetime
     from pathlib import Path
 
+    from kfp_components.components.training.automl.shared.mlflow_tracking import (
+        is_mlflow_enabled,
+        write_tracking_artifact,
+    )
     from kfp_components.components.training.automl.shared.run_status import (
         load_pipeline_run_status_manifest,
     )
@@ -74,9 +80,18 @@ def publish_component_stage_map(
     component_stage_map.metadata["pipeline_id"] = pipeline_id
     component_stage_map.metadata["component_count"] = len(stage_map.get("components", []))
 
+    tracking_file = write_tracking_artifact(
+        mlflow_tracking_artifact.path,
+        pipeline_name=pipeline_id,
+        kfp_run_id=run_id,
+    )
+    mlflow_tracking_artifact.metadata["display_name"] = "MLflow Tracking Info"
+    mlflow_tracking_artifact.metadata["tracking_enabled"] = str(is_mlflow_enabled())
+
     component_count = len(stage_map.get("components", []))
     stage_count = sum(len(c.get("stages", [])) for c in stage_map.get("components", []))
     print(f"Published component stage map for pipeline_id='{pipeline_id}':")
     print(f"  - Components: {component_count}")
     print(f"  - Total stages: {stage_count}")
     print(f"  - Published to: {output_file}")
+    print(f"  - MLflow tracking artifact: {tracking_file}")
