@@ -59,6 +59,7 @@ class TestPublishComponentStageMap:
         assert tracking_file.is_file()
         tracking_document = json.loads(tracking_file.read_text(encoding="utf-8"))
         assert tracking_document["tracking_enabled"] is False
+        assert tracking_document["tracking_mode"] == "disabled"
         assert tracking_document["kfp_run_id"] == "run-abc"
         assert mlflow_tracking_artifact.metadata["display_name"] == "MLflow Tracking Info"
 

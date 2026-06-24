@@ -41,13 +41,10 @@ def publish_component_stage_map(
         )
     """
     import json
+    import os
     from datetime import UTC, datetime
     from pathlib import Path
 
-    from kfp_components.components.training.automl.shared.mlflow_tracking import (
-        is_mlflow_enabled,
-        write_tracking_artifact,
-    )
     from kfp_components.components.training.automl.shared.run_status import (
         load_pipeline_run_status_manifest,
     )
@@ -80,13 +77,31 @@ def publish_component_stage_map(
     component_stage_map.metadata["pipeline_id"] = pipeline_id
     component_stage_map.metadata["component_count"] = len(stage_map.get("components", []))
 
-    tracking_file = write_tracking_artifact(
-        mlflow_tracking_artifact.path,
-        pipeline_name=pipeline_id,
-        kfp_run_id=run_id,
-    )
+    # Inline stub artifact so this step does not import ``mlflow_tracking`` (not yet in
+    # every odh-automl image). The final ``automl_mlflow_logger`` step refreshes it.
+    tracking_dir = Path(mlflow_tracking_artifact.path)
+    tracking_dir.mkdir(parents=True, exist_ok=True)
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
+    tracking_enabled = bool(tracking_uri)
+    tracking_mode = "disabled"
+    if tracking_enabled:
+        tracking_mode = "kfp" if os.getenv("MLFLOW_RUN_ID", "").strip() else "connection"
+    tracking_file = tracking_dir / "mlflow_tracking.json"
+    with tracking_file.open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "tracking_enabled": tracking_enabled,
+                "tracking_mode": tracking_mode,
+                "kfp_run_id": run_id,
+                "pipeline_name": pipeline_id,
+            },
+            f,
+            indent=2,
+        )
     mlflow_tracking_artifact.metadata["display_name"] = "MLflow Tracking Info"
-    mlflow_tracking_artifact.metadata["tracking_enabled"] = str(is_mlflow_enabled())
+    mlflow_tracking_artifact.metadata["tracking_enabled"] = str(tracking_enabled)
+    if tracking_enabled:
+        mlflow_tracking_artifact.metadata["tracking_mode"] = tracking_mode
 
     component_count = len(stage_map.get("components", []))
     stage_count = sum(len(c.get("stages", [])) for c in stage_map.get("components", []))
