@@ -61,6 +61,37 @@ The pipeline leverages AutoGluon's unique ensembling strategy that combines mult
 | `positive_class` | `str` | `""` | Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values. |
 | `eval_metric` | `str` | `""` | Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification. |
 | `preset` | `str` | `speed` | Training quality tier. "speed" (default, 8 vCPU / 32 GiB) or "balanced" (may run more than 2x longer, 16 vCPU / 64 GiB). |
+| `mlflow_connection_secret_name` | `str` | `""` | Kubernetes secret with MLflow env vars (for example `mlflow-connection`). Required for MLflow logging in connection-secret mode. |
+
+## Prerequisites (MLflow connection-secret mode)
+
+### One-time cluster setup (per project)
+
+1. **MLflow tracking secret** — `mlflow-connection` with `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_AUTH`, `MLFLOW_WORKSPACE`, `MLFLOW_EXPERIMENT_NAME`.
+2. **Training data secret** — S3 connection (UI or `oc`) with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`.
+3. **Artifact storage (recommended)** — `mlflow-artifact-connection` S3 secret + `MLflowConfig` CR named `mlflow` in the project.
+4. **RBAC** — pipeline service account can log experiments in the MLflow workspace.
+
+### Compile with custom image
+
+The image must include `mlflow` and this repo's `kfp_components`:
+
+```bash
+RELATED_IMAGE_ODH_AUTOML_IMAGE=quay.io/opendatahub/odh-automl@sha256:<digest> \
+  uv run python pipelines/training/automl/autogluon_tabular_training_pipeline/pipeline.py
+```
+
+Upload `pipeline.yaml` to the pipeline UI.
+
+### Start a run
+
+| Parameter | Example |
+| --- | --- |
+| `train_data_secret_name` | `aws-connection-data-storage` |
+| `mlflow_connection_secret_name` | `mlflow-connection` |
+| `train_data_bucket_name` / `train_data_file_key` | your CSV location |
+
+Results appear in MLflow at the URI from `MLFLOW_TRACKING_URI`, workspace `MLFLOW_WORKSPACE`, experiment `MLFLOW_EXPERIMENT_NAME`.
 
 ## Metadata 🗂️
 

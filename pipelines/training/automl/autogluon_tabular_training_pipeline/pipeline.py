@@ -4,10 +4,7 @@ from kfp_components.components.training.automl.autogluon_leaderboard_evaluation 
 from kfp_components.components.training.automl.autogluon_models_training import autogluon_models_training
 from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
-from kfp_components.components.training.automl.shared.mlflow_tracking import (
-    MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
-    MLFLOW_CONNECTION_SECRET_NAME,
-)
+from kfp_components.components.training.automl.shared.mlflow_tracking import MLFLOW_CONNECTION_SECRET_KEY_TO_ENV
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
@@ -16,17 +13,17 @@ MAX_MEMORY = "64Gi"
 PIPELINE_NAME = "autogluon-tabular-training-pipeline"
 
 
-def _mount_mlflow_connection_secret(task) -> None:
-    """Mount the project MLflow connection secret into a pipeline task.
+def _mount_mlflow_connection_secret(task, secret_name: str) -> None:
+    """Mount the MLflow connection secret into the logger task.
 
-    Uses a fixed secret name because KFP cannot resolve pipeline-parameter secret
-    names inside ``dsl.If`` branches (see kubeflow/pipelines#12617).
+    ``secret_name`` is the ``mlflow_connection_secret_name`` pipeline parameter (for example
+    ``mlflow-connection``). Do not wrap this call in ``dsl.If`` (see kubeflow/pipelines#12617).
     """
     from kfp.kubernetes import use_secret_as_env
 
     use_secret_as_env(
         task,
-        secret_name=MLFLOW_CONNECTION_SECRET_NAME,
+        secret_name=secret_name,
         secret_key_to_env=MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
         optional=True,
     )
@@ -63,6 +60,7 @@ def autogluon_tabular_training_pipeline(
     positive_class: str = "",
     eval_metric: str = "",
     preset: str = "speed",
+    mlflow_connection_secret_name: str = "",
 ):
     """AutoGluon Tabular Training Pipeline.
 
@@ -147,8 +145,9 @@ def autogluon_tabular_training_pipeline(
         positive_class: Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values.
         eval_metric: Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification.
         preset: Training quality tier. "speed" (default, 8 vCPU / 32 GiB) or "balanced" (may run more than 2x longer, 16 vCPU / 64 GiB).
-
-        MLflow: create a secret named ``mlflow-connection`` in the project namespace (see automl_mlflow_logger README).
+        mlflow_connection_secret_name: Kubernetes secret with MLflow tracking env vars
+            (``MLFLOW_TRACKING_URI``, ``MLFLOW_TRACKING_AUTH``, ``MLFLOW_WORKSPACE``,
+            ``MLFLOW_EXPERIMENT_NAME``). Set to ``mlflow-connection`` for connection-secret mode.
 
     Returns:
         HTML artifact with leaderboard of refitted models ranked by task_type metric (e.g. accuracy, r2).
@@ -260,7 +259,7 @@ def autogluon_tabular_training_pipeline(
         mlflow_logger_task_bl.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
             "1Gi"
         )
-        _mount_mlflow_connection_secret(mlflow_logger_task_bl)
+        _mount_mlflow_connection_secret(mlflow_logger_task_bl, mlflow_connection_secret_name)
 
     with dsl.Else():
         training_task_sp = autogluon_models_training(**_training_kwargs)
@@ -293,12 +292,14 @@ def autogluon_tabular_training_pipeline(
         mlflow_logger_task_sp.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
             "1Gi"
         )
-        _mount_mlflow_connection_secret(mlflow_logger_task_sp)
+        _mount_mlflow_connection_secret(mlflow_logger_task_sp, mlflow_connection_secret_name)
 
 
 if __name__ == "__main__":
     from kfp.compiler import Compiler
 
+    # Custom runtime image (include mlflow + kfp_components) at compile time, e.g.:
+    # RELATED_IMAGE_ODH_AUTOML_IMAGE=quay.io/opendatahub/odh-automl@sha256:... uv run python pipeline.py
     Compiler().compile(
         autogluon_tabular_training_pipeline,
         package_path=__file__.replace(".py", ".yaml"),

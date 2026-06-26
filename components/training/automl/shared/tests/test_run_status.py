@@ -6,6 +6,7 @@ from pathlib import Path
 from kfp_components.components.training.automl.shared.run_status import (
     COMPONENT_DATA_LOADER,
     COMPONENT_LEADERBOARD,
+    COMPONENT_MLFLOW_LOGGER,
     COMPONENT_MODELS_TRAINING,
     COMPONENT_TIMESERIES_DATA_LOADER,
     COMPONENT_TIMESERIES_MODELS_TRAINING,
@@ -55,11 +56,13 @@ def test_tabular_pipeline_manifest_covers_all_components():
         COMPONENT_DATA_LOADER,
         COMPONENT_MODELS_TRAINING,
         COMPONENT_LEADERBOARD,
+        COMPONENT_MLFLOW_LOGGER,
     ]
     for component in (
         COMPONENT_DATA_LOADER,
         COMPONENT_MODELS_TRAINING,
         COMPONENT_LEADERBOARD,
+        COMPONENT_MLFLOW_LOGGER,
     ):
         catalog = load_component_stage_catalog(component, pipeline_id=PIPELINE_TABULAR_TRAINING)
         assert catalog["id"] == component
@@ -75,6 +78,7 @@ def test_timeseries_pipeline_manifest_covers_all_components():
         COMPONENT_TIMESERIES_DATA_LOADER,
         COMPONENT_TIMESERIES_MODELS_TRAINING,
         COMPONENT_LEADERBOARD,
+        COMPONENT_MLFLOW_LOGGER,
     ]
 
 
@@ -92,6 +96,7 @@ def test_init_seeds_full_pipeline_as_pending(tmp_path):
         COMPONENT_DATA_LOADER,
         COMPONENT_MODELS_TRAINING,
         COMPONENT_LEADERBOARD,
+        COMPONENT_MLFLOW_LOGGER,
     ]
     assert _component_by_id(doc, COMPONENT_DATA_LOADER)["state"] == STATUS_PENDING
     assert _component_by_id(doc, COMPONENT_MODELS_TRAINING)["state"] == STATUS_PENDING

@@ -1,9 +1,7 @@
 """MLflow tracking helpers for AutoML pipeline components.
 
-Resolution order:
-1. KFP/RHOAI platform integration when ``MLFLOW_TRACKING_URI`` and ``MLFLOW_RUN_ID`` are set.
-2. User-provided connection secret (``MLFLOW_TRACKING_URI`` without ``MLFLOW_RUN_ID``).
-3. Disabled when no tracking URI is available.
+Reads ``MLFLOW_*`` environment variables from the pod (typically mounted from the
+``mlflow-connection`` secret via ``mlflow_connection_secret_name``).
 """
 
 from __future__ import annotations
@@ -11,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +21,7 @@ TRACKING_ARTIFACT_FILENAME = "mlflow_tracking.json"
 
 MlflowMode = Literal["disabled", "kfp", "connection"]
 
-# Mounted from the pipeline Kubernetes secret ``mlflow-connection`` via use_secret_as_env.
+# Default example secret name when documenting manual connection setup.
 MLFLOW_CONNECTION_SECRET_NAME = "mlflow-connection"
 
 MLFLOW_CONNECTION_SECRET_KEY_TO_ENV: dict[str, str] = {
@@ -40,6 +39,18 @@ OPTIONAL_METRIC_ARTIFACTS = (
     "curves.json",
     "back_testing.json",
 )
+
+# Metrics logged on child runs, keyed by AutoML task type.
+TASK_TYPE_METRIC_KEYS: dict[str, tuple[str, ...]] = {
+    "binary": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "roc_auc", "mcc"),
+    "multiclass": ("accuracy", "balanced_accuracy", "f1", "precision", "recall"),
+    "regression": ("r2", "root_mean_squared_error", "mean_squared_error", "mean_absolute_error"),
+    "time_series": ("MASE", "WQL", "sMAPE", "RMSE", "mean_wQuantileLoss"),
+}
+
+RUN_TYPE_PIPELINE = "pipeline"
+RUN_TYPE_MODEL = "model"
+MLFLOW_PARENT_RUN_ID_TAG = "mlflow.parentRunId"
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,9 @@ def build_tracking_artifact_payload(
     mlflow_experiment_id: str = "",
     tracking_mode: str = "",
     mlflow_error: str = "",
+    mlflow_child_run_ids: str = "",
+    mlflow_child_run_count: str = "",
+    mlflow_child_run_errors: str = "",
 ) -> dict[str, Any]:
     """Build the JSON payload for the KFP mlflow_tracking artifact."""
     config = resolve_mlflow_config()
@@ -159,6 +173,12 @@ def build_tracking_artifact_payload(
         payload["kfp_run_name"] = kfp_run_name
     if mlflow_error:
         payload["mlflow_error"] = mlflow_error
+    if mlflow_child_run_ids:
+        payload["mlflow_child_run_ids"] = mlflow_child_run_ids
+    if mlflow_child_run_count:
+        payload["mlflow_child_run_count"] = mlflow_child_run_count
+    if mlflow_child_run_errors:
+        payload["mlflow_child_run_errors"] = mlflow_child_run_errors
 
     if not tracking_enabled:
         return payload
@@ -191,6 +211,9 @@ def write_tracking_artifact(
     mlflow_experiment_id: str = "",
     tracking_mode: str = "",
     mlflow_error: str = "",
+    mlflow_child_run_ids: str = "",
+    mlflow_child_run_count: str = "",
+    mlflow_child_run_errors: str = "",
 ) -> Path:
     """Write mlflow_tracking.json under the KFP artifact directory."""
     output_dir = Path(artifact_path)
@@ -208,6 +231,9 @@ def write_tracking_artifact(
         mlflow_experiment_id=mlflow_experiment_id,
         tracking_mode=tracking_mode,
         mlflow_error=mlflow_error,
+        mlflow_child_run_ids=mlflow_child_run_ids,
+        mlflow_child_run_count=mlflow_child_run_count,
+        mlflow_child_run_errors=mlflow_child_run_errors,
     )
     payload_text = json.dumps(payload, indent=2)
     with output_file.open("w", encoding="utf-8") as f:
@@ -265,6 +291,13 @@ def parse_model_name(model_name: str) -> tuple[str, int]:
     return model_type, stack_level
 
 
+def display_model_run_name(model_name: str) -> str:
+    """Return a concise MLflow run name for a refitted AutoGluon model."""
+    if model_name.endswith("_FULL"):
+        return model_name[: -len("_FULL")]
+    return model_name
+
+
 def _load_model_names(models_artifact: Any) -> list[str]:
     model_names_raw = models_artifact.metadata.get("model_names", "[]")
     if isinstance(model_names_raw, str):
@@ -280,6 +313,33 @@ def _load_metrics_json(models_artifact_path: Path, model_name: str) -> dict[str,
         return json.load(f)
 
 
+def _normalize_model_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Flatten artifact metadata that nests scores under ``test_data``."""
+    test_data = metrics.get("test_data")
+    if isinstance(test_data, dict) and test_data:
+        return dict(test_data)
+    return dict(metrics)
+
+
+def _load_model_metrics(
+    models_artifact: Any,
+    models_path: Path,
+    model_name: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Load per-model metrics from the local artifact tree or pipeline metadata."""
+    metrics = _load_metrics_json(models_path, model_name)
+    if metrics:
+        return metrics
+    for model in context.get("models", []):
+        if model.get("name") != model_name:
+            continue
+        raw_metrics = model.get("metrics", {})
+        if isinstance(raw_metrics, dict):
+            return raw_metrics
+    return {}
+
+
 def _scalar_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     logged: dict[str, float] = {}
     for key, value in metrics.items():
@@ -292,23 +352,152 @@ def _scalar_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     return logged
 
 
+def _metrics_for_task(task_type: str, metrics: dict[str, Any]) -> dict[str, float]:
+    """Select task-relevant scalar metrics for a model child run."""
+    normalized = _normalize_model_metrics(metrics)
+    scalars = _scalar_metrics(normalized)
+    preferred_keys = TASK_TYPE_METRIC_KEYS.get(task_type)
+    if preferred_keys:
+        selected = {key: value for key, value in scalars.items() if key in preferred_keys}
+        if selected:
+            return selected
+    return scalars
+
+
+def _stringify_params(params: dict[str, Any]) -> dict[str, str]:
+    """MLflow params must be strings."""
+    return {key: str(value) for key, value in params.items()}
+
+
+def _resolve_autogluon_version() -> str:
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        for package in ("autogluon.tabular", "autogluon.core", "autogluon"):
+            try:
+                return version(package)
+            except PackageNotFoundError:
+                continue
+    except Exception:
+        logger.debug("Could not resolve autogluon version from package metadata", exc_info=True)
+    try:
+        import autogluon
+
+        return getattr(autogluon, "__version__", "unknown")
+    except Exception:
+        logger.debug("Could not import autogluon for version lookup", exc_info=True)
+    return "unknown"
+
+
+def _safe_log_artifact(mlflow: Any, file_path: Path, artifact_path: str) -> bool:
+    """Upload a local file to MLflow, logging and continuing on failure."""
+    if not file_path.is_file():
+        return False
+    try:
+        mlflow.log_artifact(str(file_path), artifact_path=artifact_path)
+        return True
+    except Exception:
+        logger.exception("Failed to upload MLflow artifact %s to %s", file_path, artifact_path)
+        return False
+
+
+def _write_temp_json(tmp_dir: Path, filename: str, payload: dict[str, Any]) -> Path:
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    output = tmp_dir / filename
+    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return output
+
+
+def _build_leaderboard_summary(
+    *,
+    model_names: list[str],
+    valid_metrics: dict[str, dict[str, Any]],
+    eval_metric: str,
+) -> dict[str, Any]:
+    models = []
+    for model_name in model_names:
+        metrics = valid_metrics.get(model_name)
+        if not metrics:
+            continue
+        models.append(
+            {
+                "model_name": model_name,
+                "display_name": display_model_run_name(model_name),
+                "metrics": _normalize_model_metrics(metrics),
+            }
+        )
+    return {"eval_metric": eval_metric, "models": models}
+
+
+@contextmanager
+def _child_mlflow_run(
+    mlflow: Any,
+    *,
+    experiment_id: str,
+    parent_run_id: str,
+    run_name: str,
+    tags: dict[str, str],
+) -> Iterator[Any]:
+    """Open a nested child run, falling back to explicit parent linkage when needed."""
+    try:
+        with mlflow.start_run(run_name=run_name, nested=True) as run:
+            yield run
+            return
+    except Exception as exc:
+        logger.warning(
+            "MLflow nested child run failed for %s (%s); trying MlflowClient.create_run.",
+            run_name,
+            exc,
+        )
+
+    run_tags = [mlflow.entities.RunTag(MLFLOW_PARENT_RUN_ID_TAG, parent_run_id)]
+    for key, value in tags.items():
+        run_tags.append(mlflow.entities.RunTag(key, value))
+
+    client = mlflow.MlflowClient()
+    created_run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=run_tags)
+    try:
+        with mlflow.start_run(run_id=created_run.info.run_id) as run:
+            yield run
+    except Exception as exc:
+        client.set_terminated(created_run.info.run_id, status="FAILED")
+        raise exc
+
+
 def _aggregate_scores(model_metrics: dict[str, dict[str, Any]], eval_metric: str) -> list[float]:
     scores: list[float] = []
     for metrics in model_metrics.values():
-        if eval_metric in metrics and isinstance(metrics[eval_metric], (int, float)):
-            scores.append(float(metrics[eval_metric]))
+        normalized = _normalize_model_metrics(metrics)
+        if eval_metric in normalized and isinstance(normalized[eval_metric], (int, float)):
+            scores.append(float(normalized[eval_metric]))
     return scores
 
 
-def _log_optional_metric_artifacts(mlflow: Any, metrics_dir: Path) -> None:
+def _log_optional_metric_artifacts(
+    mlflow: Any,
+    metrics_dir: Path,
+    *,
+    metrics: dict[str, Any],
+    display_name: str,
+    tmp_dir: Path,
+) -> None:
+    uploaded = False
     metrics_json = metrics_dir / "metrics.json"
-    if metrics_json.is_file():
-        mlflow.log_artifact(str(metrics_json), artifact_path="metrics")
+    if _safe_log_artifact(mlflow, metrics_json, "metrics"):
+        uploaded = True
 
     for filename in OPTIONAL_METRIC_ARTIFACTS:
         artifact_file = metrics_dir / filename
-        if artifact_file.is_file():
-            mlflow.log_artifact(str(artifact_file), artifact_path="metrics")
+        if _safe_log_artifact(mlflow, artifact_file, "metrics"):
+            uploaded = True
+
+    if not uploaded:
+        summary = _write_temp_json(
+            tmp_dir,
+            f"{display_name}_metrics.json",
+            _normalize_model_metrics(metrics),
+        )
+        _safe_log_artifact(mlflow, summary, "metrics")
 
 
 def _log_runs_under_parent(
@@ -329,10 +518,21 @@ def _log_runs_under_parent(
     context: dict[str, Any],
     autogluon_version: str,
     scores: list[float],
-) -> str:
+) -> tuple[str, list[str], list[str]]:
+    parent_active = mlflow.active_run()
+    if parent_active is None:
+        logger.warning("No active MLflow parent run; skipping child run creation.")
+        return "", [], []
+
+    parent_run_id = parent_active.info.run_id
+    experiment_id = parent_active.info.experiment_id
+    child_run_ids: list[str] = []
+    child_run_errors: list[str] = []
+    tmp_dir = Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
+
     best_model_name = max(
         valid_metrics,
-        key=lambda name: float(valid_metrics[name].get(eval_metric, float("-inf"))),
+        key=lambda name: float(_normalize_model_metrics(valid_metrics[name]).get(eval_metric, float("-inf"))),
     )
 
     mlflow.set_tags(
@@ -342,6 +542,7 @@ def _log_runs_under_parent(
             "kfp_run_name": kfp_run_name,
             "task_type": task_type,
             "autogluon_version": autogluon_version,
+            "run_type": RUN_TYPE_PIPELINE,
         }
     )
 
@@ -359,7 +560,7 @@ def _log_runs_under_parent(
     if data_config:
         parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
 
-    mlflow.log_params(parent_params)
+    mlflow.log_params(_stringify_params(parent_params))
 
     if scores:
         mlflow.log_metric("best_score", max(scores))
@@ -368,10 +569,25 @@ def _log_runs_under_parent(
     mlflow.log_metric("num_models_trained", len(valid_metrics))
 
     html_path = resolve_leaderboard_html_path(html_artifact_path)
+    uploaded_report = False
     if html_path is not None:
-        mlflow.log_artifact(str(html_path), artifact_path="reports")
+        uploaded_report = _safe_log_artifact(mlflow, html_path, "reports")
     else:
-        logger.warning("Leaderboard HTML not found at %s; skipping MLflow report artifact.", html_artifact_path)
+        logger.warning("Leaderboard HTML not found at %s.", html_artifact_path)
+
+    summary_path = _write_temp_json(
+        tmp_dir,
+        "leaderboard_summary.json",
+        _build_leaderboard_summary(
+            model_names=model_names,
+            valid_metrics=valid_metrics,
+            eval_metric=eval_metric,
+        ),
+    )
+    if not uploaded_report:
+        _safe_log_artifact(mlflow, summary_path, "reports")
+    else:
+        _safe_log_artifact(mlflow, summary_path, "reports")
 
     base_uri = str(models_artifact.uri).rstrip("/")
     for model_name in model_names:
@@ -381,31 +597,75 @@ def _log_runs_under_parent(
             continue
 
         model_type, stack_level = parse_model_name(model_name)
+        display_name = display_model_run_name(model_name)
         model_uri = f"{base_uri}/{model_name}"
+        task_metrics = _metrics_for_task(task_type, metrics)
 
         child_params: dict[str, Any] = {
+            "model_name": model_name,
             "model_type": model_type,
             "stack_level": stack_level,
             "metrics_path": f"{model_uri}/metrics",
             "predictor_path": f"{model_uri}/predictor",
             "notebook_path": f"{model_uri}/notebooks/automl_predictor_notebook.ipynb",
         }
-        if "fit_time" in metrics:
-            child_params["fit_time"] = metrics["fit_time"]
-        if "pred_time_val" in metrics:
-            child_params["predict_time"] = metrics["pred_time_val"]
+        normalized = _normalize_model_metrics(metrics)
+        if "fit_time" in normalized:
+            child_params["fit_time"] = normalized["fit_time"]
+        if "pred_time_val" in normalized:
+            child_params["predict_time"] = normalized["pred_time_val"]
 
-        with mlflow.start_run(run_name=model_name, nested=True):
-            mlflow.log_params(child_params)
-            mlflow.log_metrics(_scalar_metrics(metrics))
+        child_tags = {
+            "run_type": RUN_TYPE_MODEL,
+            "model_name": model_name,
+            "model_type": model_type,
+            "stack_level": str(stack_level),
+            "kfp_run_id": kfp_run_id,
+        }
 
-            metrics_dir = models_path / model_name / "metrics"
-            _log_optional_metric_artifacts(mlflow, metrics_dir)
+        try:
+            with _child_mlflow_run(
+                mlflow,
+                experiment_id=experiment_id,
+                parent_run_id=parent_run_id,
+                run_name=display_name,
+                tags=child_tags,
+            ) as _child_run:
+                mlflow.set_tags(child_tags)
+                mlflow.log_params(_stringify_params(child_params))
+                if task_metrics:
+                    mlflow.log_metrics(task_metrics)
+                else:
+                    logger.warning("No scalar metrics to log for MLflow child run %s.", display_name)
 
-    active_run = mlflow.active_run()
-    if active_run is None:
-        return ""
-    return active_run.info.run_id
+                metrics_dir = models_path / model_name / "metrics"
+                _log_optional_metric_artifacts(
+                    mlflow,
+                    metrics_dir,
+                    metrics=metrics,
+                    display_name=display_name,
+                    tmp_dir=tmp_dir,
+                )
+                active_child = mlflow.active_run()
+                if active_child is not None and active_child.info.run_id:
+                    child_run_ids.append(str(active_child.info.run_id))
+        except Exception as exc:
+            message = f"{model_name}: {exc}"
+            child_run_errors.append(message)
+            logger.exception("Failed to create MLflow child run for model %s.", model_name)
+
+    if child_run_ids:
+        mlflow.log_metric("child_run_count", len(child_run_ids))
+    else:
+        logger.warning(
+            "No MLflow child runs were created under parent run %s. Errors: %s",
+            parent_run_id,
+            child_run_errors,
+        )
+    if child_run_errors:
+        mlflow.set_tag("child_run_errors", json.dumps(child_run_errors)[:500])
+
+    return parent_run_id, child_run_ids, child_run_errors
 
 
 def log_automl_results(
@@ -442,26 +702,22 @@ def log_automl_results(
         logger.warning("No model_names in models artifact metadata; skipping MLflow logging.")
         return False, {}
 
-    model_metrics = {name: _load_metrics_json(models_path, name) for name in model_names}
-    valid_metrics = {name: metrics for name, metrics in model_metrics.items() if metrics}
-    if not valid_metrics:
-        logger.warning("No metrics.json files found for any model; skipping MLflow logging.")
-        return False, {}
-
     context_raw = models_artifact.metadata.get("context", {})
     if isinstance(context_raw, str):
         context = json.loads(context_raw)
     else:
         context = dict(context_raw) if context_raw else {}
 
-    resolved_task_type = task_type or str(context.get("task_type", ""))
-    autogluon_version = "unknown"
-    try:
-        import autogluon
+    model_metrics = {
+        name: _load_model_metrics(models_artifact, models_path, name, context) for name in model_names
+    }
+    valid_metrics = {name: metrics for name, metrics in model_metrics.items() if metrics}
+    if not valid_metrics:
+        logger.warning("No metrics.json files found for any model; skipping MLflow logging.")
+        return False, {}
 
-        autogluon_version = autogluon.__version__
-    except Exception:
-        logger.debug("Could not resolve autogluon version", exc_info=True)
+    resolved_task_type = task_type or str(context.get("task_type", ""))
+    autogluon_version = _resolve_autogluon_version()
 
     scores = _aggregate_scores(valid_metrics, eval_metric)
     if not scores:
@@ -469,13 +725,15 @@ def log_automl_results(
 
     try:
         parent_run_id = ""
+        child_run_ids: list[str] = []
+        child_run_errors: list[str] = []
         with parent_mlflow_run(
             mlflow,
             config,
             pipeline_name=pipeline_name,
             kfp_run_name=kfp_run_name,
         ):
-            parent_run_id = _log_runs_under_parent(
+            parent_run_id, child_run_ids, child_run_errors = _log_runs_under_parent(
                 mlflow,
                 models_artifact=models_artifact,
                 models_path=models_path,
@@ -504,12 +762,16 @@ def log_automl_results(
             "mlflow_run_id": parent_run_id or config.run_id,
             "mlflow_experiment_id": experiment_id,
             "tracking_mode": config.mode,
+            "mlflow_child_run_ids": ",".join(child_run_ids),
+            "mlflow_child_run_count": str(len(child_run_ids)),
         }
+        if child_run_errors:
+            tracking_info["mlflow_child_run_errors"] = json.dumps(child_run_errors)
         logger.info(
             "Logged AutoML results to MLflow (%s mode, parent run %s, %d child runs).",
             config.mode,
             tracking_info["mlflow_run_id"],
-            len(valid_metrics),
+            len(child_run_ids),
         )
         return True, tracking_info
     except Exception as exc:

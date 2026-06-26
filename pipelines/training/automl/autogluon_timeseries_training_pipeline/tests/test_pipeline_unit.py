@@ -55,6 +55,7 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
             "top_n",
             "preset",
             "eval_metric",
+            "mlflow_connection_secret_name",
         }
         inputs = autogluon_timeseries_training_pipeline.component_spec.inputs
         params = set(inputs.keys())
@@ -64,6 +65,7 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
         assert inputs["known_covariates_names"].default is None
         assert inputs["preset"].default == "speed"
         assert inputs["eval_metric"].default == "MASE"
+        assert inputs["mlflow_connection_secret_name"].default == ""
 
     def test_compiled_pipeline_has_expected_inputs(self):
         """Test that compiled pipeline YAML contains expected pipeline input names."""
@@ -88,6 +90,7 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
                 "top_n",
                 "preset",
                 "eval_metric",
+                "mlflow_connection_secret_name",
             ):
                 assert name in content, f"Expected pipeline input '{name}' in compiled YAML"
         except Exception as e:

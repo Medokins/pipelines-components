@@ -77,8 +77,7 @@ def publish_component_stage_map(
     component_stage_map.metadata["pipeline_id"] = pipeline_id
     component_stage_map.metadata["component_count"] = len(stage_map.get("components", []))
 
-    # Inline stub artifact so this step does not import ``mlflow_tracking`` (not yet in
-    # every odh-automl image). The final ``automl_mlflow_logger`` step refreshes it.
+    # Early placeholder; ``automl_mlflow_logger`` refreshes this after logging completes.
     tracking_dir = Path(mlflow_tracking_artifact.path)
     tracking_dir.mkdir(parents=True, exist_ok=True)
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()

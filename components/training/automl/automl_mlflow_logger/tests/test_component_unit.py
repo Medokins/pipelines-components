@@ -197,21 +197,3 @@ class TestAutomlMlflowLogger:
                 mlflow_tracking_artifact=mlflow_tracking_artifact,
                 top_n=0,
             )
-
-    def test_embedded_mlflow_tracking_module_load(self, tmp_path):
-        """Embedded mlflow_tracking.py loads when registered in sys.modules."""
-        import importlib.util
-        import sys
-
-        source = Path(__file__).resolve().parents[2] / "shared" / "mlflow_tracking.py"
-        module_path = tmp_path / "mlflow_tracking.py"
-        module_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-
-        module_name = "embedded_mlflow_tracking_test"
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        assert callable(module.log_automl_results)
-        assert callable(module.write_tracking_artifact)

@@ -55,6 +55,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
             "positive_class",
             "preset",
             "eval_metric",
+            "mlflow_connection_secret_name",
         }
         inputs = autogluon_tabular_training_pipeline.component_spec.inputs
         params = set(inputs.keys())
@@ -62,6 +63,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
         assert inputs["top_n"].default == 3
         assert inputs["preset"].default == "speed"
         assert inputs["eval_metric"].default == ""
+        assert inputs["mlflow_connection_secret_name"].default == ""
 
     def test_compiled_pipeline_has_expected_inputs(self):
         """Test that the compiled pipeline YAML contains expected pipeline inputs."""
@@ -84,6 +86,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
                 "positive_class",
                 "preset",
                 "eval_metric",
+                "mlflow_connection_secret_name",
             ):
                 assert name in content, f"Expected pipeline input '{name}' in compiled YAML"
         except Exception as e:
@@ -171,6 +174,22 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
 
         assert "componentInputParameter: preset" in content
         assert "condition-branches-1" in content
+
+    def test_compiled_pipeline_wires_mlflow_connection_secret_parameter(self):
+        """MLflow logger mounts secret from mlflow_connection_secret_name pipeline input."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+        try:
+            compiler.Compiler().compile(
+                pipeline_func=autogluon_tabular_training_pipeline,
+                package_path=tmp_path,
+            )
+            content = Path(tmp_path).read_text(encoding="utf-8")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        assert "componentInputParameter: mlflow_connection_secret_name" in content
+        assert "exec-automl-mlflow-logger-2" in content
 
     def test_compiled_pipeline_data_loader_declares_task_type_and_label(self):
         """Tabular data loader component exposes task_type and label_column inputs."""

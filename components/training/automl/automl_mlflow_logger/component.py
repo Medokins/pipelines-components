@@ -10,7 +10,6 @@ _AUTOML_SHARED = Path(__file__).resolve().parents[1] / "shared"
     base_image=AUTOML_IMAGE,  # noqa: E501
     embedded_artifact_path=str(_AUTOML_SHARED / "mlflow_tracking.py"),
     install_kfp_package=False,
-    packages_to_install=["mlflow[kubernetes]>=3.11"],
 )
 def automl_mlflow_logger(
     models_artifact: dsl.Input[dsl.Model],
@@ -27,11 +26,12 @@ def automl_mlflow_logger(
 ) -> None:
     """Log AutoML experiment results to MLflow at the end of the pipeline run.
 
-    MLflow configuration is resolved in this order:
+    Expects ``MLFLOW_*`` environment variables from the ``mlflow_connection_secret_name``
+    pipeline parameter (mounted on this step only). When ``MLFLOW_TRACKING_URI`` is unset,
+    logging is skipped and the step completes successfully.
 
-    1. KFP/RHOAI platform env vars (``MLFLOW_TRACKING_URI`` + ``MLFLOW_RUN_ID``).
-    2. User connection secret env vars (``MLFLOW_TRACKING_URI`` without ``MLFLOW_RUN_ID``).
-    3. Disabled when no tracking URI is available.
+    ``mlflow_tracking.py`` is embedded at compile time when the runtime image does not yet
+    ship ``kfp_components...mlflow_tracking``.
 
     Args:
         models_artifact: Combined models artifact from training with ``metadata["model_names"]``.
@@ -59,30 +59,34 @@ def automl_mlflow_logger(
     from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
 
     def _load_mlflow_tracking_helpers():
-        if embedded_artifact is not None:
+        try:
+            from kfp_components.components.training.automl.shared.mlflow_tracking import (
+                log_automl_results as _log_automl_results,
+            )
+            from kfp_components.components.training.automl.shared.mlflow_tracking import (
+                write_tracking_artifact as _write_tracking_artifact,
+            )
+
+            return _log_automl_results, _write_tracking_artifact
+        except ModuleNotFoundError:
+            if embedded_artifact is None:
+                raise
             embedded_path = Path(embedded_artifact.path)
             module_path = embedded_path if embedded_path.is_file() else embedded_path / "mlflow_tracking.py"
-            if module_path.is_file():
-                module_name = "kfp_components_automl_embedded_mlflow_tracking"
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
-                if spec is None or spec.loader is None:
-                    raise ModuleNotFoundError(
-                        f"Cannot load embedded mlflow_tracking from {module_path}"
-                    ) from None
-                module = importlib.util.module_from_spec(spec)
-                # Required before exec_module when the file uses @dataclass.
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
-                return module.log_automl_results, module.write_tracking_artifact
-
-        from kfp_components.components.training.automl.shared.mlflow_tracking import (
-            log_automl_results as _log_automl_results,
-        )
-        from kfp_components.components.training.automl.shared.mlflow_tracking import (
-            write_tracking_artifact as _write_tracking_artifact,
-        )
-
-        return _log_automl_results, _write_tracking_artifact
+            if not module_path.is_file():
+                raise ModuleNotFoundError(
+                    f"mlflow_tracking not found in image or embedded artifact at {module_path}"
+                ) from None
+            module_name = "kfp_components_automl_embedded_mlflow_tracking"
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec is None or spec.loader is None:
+                raise ModuleNotFoundError(
+                    f"Cannot load embedded mlflow_tracking from {module_path}"
+                ) from None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            return module.log_automl_results, module.write_tracking_artifact
 
     log_automl_results, write_tracking_artifact = _load_mlflow_tracking_helpers()
 
@@ -97,9 +101,8 @@ def automl_mlflow_logger(
     )
     if not tracking_uri:
         logger.warning(
-            "MLFLOW_TRACKING_URI is unset in this pod. "
-            "Enable RHOAI project MLflow integration or verify the mlflow-connection secret "
-            "is mounted on exec-automl-mlflow-logger(-2) in the compiled pipeline.yaml."
+            "MLFLOW_TRACKING_URI is unset. Set pipeline parameter mlflow_connection_secret_name "
+            "(for example mlflow-connection) when starting the run."
         )
 
     if not isinstance(eval_metric, str) or not eval_metric.strip():
@@ -138,6 +141,9 @@ def automl_mlflow_logger(
             mlflow_experiment_id=tracking_info.get("mlflow_experiment_id", ""),
             tracking_mode=tracking_info.get("tracking_mode", ""),
             mlflow_error=tracking_info.get("error", ""),
+            mlflow_child_run_ids=tracking_info.get("mlflow_child_run_ids", ""),
+            mlflow_child_run_count=tracking_info.get("mlflow_child_run_count", ""),
+            mlflow_child_run_errors=tracking_info.get("mlflow_child_run_errors", ""),
         )
         mlflow_tracking_artifact.metadata["display_name"] = "MLflow Tracking Info"
         mlflow_tracking_artifact.metadata["tracking_enabled"] = str(logged)
@@ -151,6 +157,12 @@ def automl_mlflow_logger(
             mlflow_tracking_artifact.metadata["mlflow_error"] = tracking_info["error"]
         if tracking_uri:
             mlflow_tracking_artifact.metadata["mlflow_tracking_uri"] = tracking_uri
+        if tracking_info.get("mlflow_child_run_count"):
+            mlflow_tracking_artifact.metadata["mlflow_child_run_count"] = tracking_info["mlflow_child_run_count"]
+        if tracking_info.get("mlflow_child_run_ids"):
+            mlflow_tracking_artifact.metadata["mlflow_child_run_ids"] = tracking_info["mlflow_child_run_ids"]
+        if tracking_info.get("mlflow_child_run_errors"):
+            mlflow_tracking_artifact.metadata["mlflow_child_run_errors"] = tracking_info["mlflow_child_run_errors"]
 
         if logged:
             logger.info("MLflow logging completed for pipeline run %s.", run_id)

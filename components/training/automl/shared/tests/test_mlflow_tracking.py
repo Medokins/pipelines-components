@@ -12,12 +12,15 @@ from kfp_components.components.training.automl.shared.mlflow_tracking import (
     MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
     build_mlflow_run_url,
     build_tracking_artifact_payload,
+    display_model_run_name,
     is_mlflow_enabled,
     log_automl_results,
     parse_model_name,
     resolve_leaderboard_html_path,
     resolve_mlflow_config,
     write_tracking_artifact,
+    _metrics_for_task,
+    _normalize_model_metrics,
 )
 
 
@@ -134,6 +137,31 @@ class TestMlflowTrackingHelpers:
         assert model_type == expected_type
         assert stack_level == expected_level
 
+    @pytest.mark.parametrize(
+        ("model_name", "expected_display"),
+        [
+            ("WeightedEnsemble_L3_FULL", "WeightedEnsemble_L3"),
+            ("CatBoost_BAG_L1_FULL", "CatBoost_BAG_L1"),
+            ("Naive", "Naive"),
+        ],
+    )
+    def test_display_model_run_name(self, model_name, expected_display):
+        """Strip refit suffix from MLflow child run names."""
+        assert display_model_run_name(model_name) == expected_display
+
+    def test_normalize_model_metrics_flattens_test_data(self):
+        """Flatten nested test_data metrics from artifact metadata."""
+        payload = {"test_data": {"accuracy": 0.91, "f1": 0.88}}
+        assert _normalize_model_metrics(payload) == {"accuracy": 0.91, "f1": 0.88}
+
+    def test_metrics_for_task_binary(self):
+        """Log task-specific classification metrics on child runs."""
+        metrics = _metrics_for_task(
+            "binary",
+            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "fit_time": 12.0},
+        )
+        assert metrics == {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95}
+
     def test_resolve_leaderboard_html_path_file(self, tmp_path):
         """Resolve a direct HTML file path."""
         html_file = tmp_path / "leaderboard.html"
@@ -158,6 +186,15 @@ def _make_models_artifact(base_path: Path, model_names: list[str], *, uri: str =
         "context": {"task_type": "binary"},
     }
     return artifact
+
+
+def _mock_run_context(run_id: str, experiment_id: str = "1") -> mock.MagicMock:
+    ctx = mock.MagicMock()
+    ctx.info.run_id = run_id
+    ctx.info.experiment_id = experiment_id
+    ctx.__enter__ = mock.Mock(return_value=ctx)
+    ctx.__exit__ = mock.Mock(return_value=False)
+    return ctx
 
 
 class TestLogAutomlResults:
@@ -194,11 +231,11 @@ class TestLogAutomlResults:
         (tmp_path / "leaderboard.html").write_text("<html></html>", encoding="utf-8")
 
         mock_mlflow = mock.MagicMock()
-        parent_ctx = mock.MagicMock()
-        child_ctx = mock.MagicMock()
-        parent_ctx.info.run_id = "parent-run"
+        parent_ctx = _mock_run_context("parent-run", "1")
+        child_ctx = _mock_run_context("child-run-1", "1")
         mock_mlflow.start_run.side_effect = [parent_ctx, child_ctx]
-        mock_mlflow.active_run.return_value = parent_ctx
+        mock_mlflow.active_run.side_effect = [parent_ctx, child_ctx, parent_ctx]
+        mock_mlflow.entities.RunTag = mock.Mock(side_effect=lambda key, value: (key, value))
 
         models_artifact = _make_models_artifact(tmp_path, [model_name])
         with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
@@ -215,12 +252,57 @@ class TestLogAutomlResults:
 
         assert logged is True
         assert tracking_info["tracking_mode"] == "kfp"
+        assert tracking_info["mlflow_child_run_count"] == "1"
+        assert tracking_info["mlflow_child_run_ids"] == "child-run-1"
         mock_mlflow.start_run.assert_any_call(run_id="parent-run")
-        mock_mlflow.start_run.assert_any_call(run_name=model_name, nested=True)
-        mock_mlflow.set_tags.assert_called_once()
+        mock_mlflow.start_run.assert_any_call(run_name="LightGBM_BAG_L1", nested=True)
+        mock_mlflow.set_tags.assert_called()
         mock_mlflow.log_params.assert_called()
-        mock_mlflow.log_metrics.assert_called_once()
+        mock_mlflow.log_metrics.assert_called()
         mock_mlflow.log_artifact.assert_called()
+
+    def test_logs_multiple_child_runs(self, tmp_path, monkeypatch):
+        """Create one child MLflow run per model under the parent run."""
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
+        monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "automl-experiments")
+
+        model_names = ["WeightedEnsemble_L3_FULL", "CatBoost_BAG_L1_FULL"]
+        for model_name in model_names:
+            metrics_dir = tmp_path / model_name / "metrics"
+            metrics_dir.mkdir(parents=True)
+            (metrics_dir / "metrics.json").write_text(
+                json.dumps({"accuracy": 0.9, "f1": 0.88, "roc_auc": 0.95}),
+                encoding="utf-8",
+            )
+        (tmp_path / "leaderboard.html").write_text("<html></html>", encoding="utf-8")
+
+        mock_mlflow = mock.MagicMock()
+        parent_ctx = _mock_run_context("parent-run", "99")
+        child_ctx_1 = _mock_run_context("child-1", "99")
+        child_ctx_2 = _mock_run_context("child-2", "99")
+        mock_mlflow.start_run.side_effect = [parent_ctx, child_ctx_1, child_ctx_2]
+        mock_mlflow.active_run.side_effect = [parent_ctx, child_ctx_1, parent_ctx, child_ctx_2, parent_ctx]
+        mock_mlflow.entities.RunTag = mock.Mock(side_effect=lambda key, value: (key, value))
+        mock_experiment = mock.MagicMock()
+        mock_experiment.experiment_id = "99"
+        mock_mlflow.get_experiment_by_name.return_value = mock_experiment
+
+        models_artifact = _make_models_artifact(tmp_path, model_names)
+        with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
+            logged, tracking_info = log_automl_results(
+                models_artifact=models_artifact,
+                html_artifact_path=tmp_path / "leaderboard.html",
+                eval_metric="accuracy",
+                pipeline_name="autogluon-tabular-training-pipeline",
+                kfp_run_id="run-1",
+                task_type="binary",
+            )
+
+        assert logged is True
+        assert tracking_info["mlflow_child_run_count"] == "2"
+        mock_mlflow.start_run.assert_any_call(run_name="WeightedEnsemble_L3", nested=True)
+        mock_mlflow.start_run.assert_any_call(run_name="CatBoost_BAG_L1", nested=True)
 
     def test_logs_connection_mode_creates_parent_run(self, tmp_path, monkeypatch):
         """Create a new parent run when only connection secret env vars are present."""
@@ -235,11 +317,11 @@ class TestLogAutomlResults:
         (tmp_path / "leaderboard.html").write_text("<html></html>", encoding="utf-8")
 
         mock_mlflow = mock.MagicMock()
-        parent_ctx = mock.MagicMock()
-        child_ctx = mock.MagicMock()
-        parent_ctx.info.run_id = "connection-parent-run"
+        parent_ctx = _mock_run_context("connection-parent-run", "99")
+        child_ctx = _mock_run_context("child-run-1", "99")
         mock_mlflow.start_run.side_effect = [parent_ctx, child_ctx]
-        mock_mlflow.active_run.return_value = parent_ctx
+        mock_mlflow.active_run.side_effect = [parent_ctx, child_ctx, parent_ctx]
+        mock_mlflow.entities.RunTag = mock.Mock(side_effect=lambda key, value: (key, value))
         mock_experiment = mock.MagicMock()
         mock_experiment.experiment_id = "99"
         mock_mlflow.get_experiment_by_name.return_value = mock_experiment
@@ -258,8 +340,10 @@ class TestLogAutomlResults:
         assert tracking_info["tracking_mode"] == "connection"
         assert tracking_info["mlflow_run_id"] == "connection-parent-run"
         assert tracking_info["mlflow_experiment_id"] == "99"
+        assert tracking_info["mlflow_child_run_count"] == "1"
         mock_mlflow.set_experiment.assert_called_once_with("automl-experiments")
         mock_mlflow.start_run.assert_any_call(run_name="autogluon-tabular-training-pipeline")
+        mock_mlflow.start_run.assert_any_call(run_name="LightGBM_BAG_L1", nested=True)
 
     def test_returns_false_when_mlflow_api_fails(self, tmp_path, monkeypatch):
         """Do not raise when the MLflow API call fails."""

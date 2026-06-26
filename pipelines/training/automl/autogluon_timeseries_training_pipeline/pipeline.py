@@ -8,10 +8,7 @@ from kfp_components.components.training.automl.autogluon_timeseries_models_train
 )
 from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
-from kfp_components.components.training.automl.shared.mlflow_tracking import (
-    MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
-    MLFLOW_CONNECTION_SECRET_NAME,
-)
+from kfp_components.components.training.automl.shared.mlflow_tracking import MLFLOW_CONNECTION_SECRET_KEY_TO_ENV
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
@@ -20,13 +17,16 @@ MAX_MEMORY = "64Gi"
 PIPELINE_NAME = "autogluon-timeseries-training-pipeline"
 
 
-def _mount_mlflow_connection_secret(task) -> None:
-    """Mount the project MLflow connection secret into a pipeline task."""
+def _mount_mlflow_connection_secret(task, secret_name: str) -> None:
+    """Mount an MLflow connection secret into a pipeline task.
+
+    See ``autogluon_tabular_training_pipeline._mount_mlflow_connection_secret``.
+    """
     from kfp.kubernetes import use_secret_as_env
 
     use_secret_as_env(
         task,
-        secret_name=MLFLOW_CONNECTION_SECRET_NAME,
+        secret_name=secret_name,
         secret_key_to_env=MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
         optional=True,
     )
@@ -63,6 +63,7 @@ def autogluon_timeseries_training_pipeline(
     top_n: int = 3,
     eval_metric: str = "MASE",
     preset: str = "speed",
+    mlflow_connection_secret_name: str = "",
 ):
     """AutoGluon time series training pipeline.
 
@@ -125,8 +126,9 @@ def autogluon_timeseries_training_pipeline(
             snake_case form. Defaults to ``"MASE"``.
         preset: Training quality tier. ``"speed"`` (default, 4 vCPU / 16 GiB) or
             ``"balanced"`` (may run more than 2x longer, 8 vCPU / 32 GiB).
-
-        MLflow: create a secret named ``mlflow-connection`` in the project namespace.
+        mlflow_connection_secret_name: Kubernetes secret with MLflow tracking env vars
+            (``MLFLOW_TRACKING_URI``, ``MLFLOW_TRACKING_AUTH``, ``MLFLOW_WORKSPACE``,
+            ``MLFLOW_EXPERIMENT_NAME``). Set to ``mlflow-connection`` for connection-secret mode.
 
     Returns:
         This pipeline wires task outputs between components; compiled runs expose the combined models artifact
@@ -242,7 +244,7 @@ def autogluon_timeseries_training_pipeline(
         mlflow_logger_task_bl.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
             "1Gi"
         )
-        _mount_mlflow_connection_secret(mlflow_logger_task_bl)
+        _mount_mlflow_connection_secret(mlflow_logger_task_bl, mlflow_connection_secret_name)
 
     with dsl.Else():
         training_task_sp = autogluon_timeseries_models_training(**_training_kwargs)
@@ -275,7 +277,7 @@ def autogluon_timeseries_training_pipeline(
         mlflow_logger_task_sp.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit(
             "1Gi"
         )
-        _mount_mlflow_connection_secret(mlflow_logger_task_sp)
+        _mount_mlflow_connection_secret(mlflow_logger_task_sp, mlflow_connection_secret_name)
 
 
 if __name__ == "__main__":
