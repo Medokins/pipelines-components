@@ -8,17 +8,15 @@ from unittest import mock
 import pytest
 
 from kfp_components.components.training.automl.shared.mlflow_tracking import (
-    TRACKING_ARTIFACT_FILENAME,
     MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
     build_mlflow_run_url,
-    build_tracking_artifact_payload,
+    build_mlflow_stage_map_block,
     display_model_run_name,
     is_mlflow_enabled,
     log_automl_results,
     parse_model_name,
     resolve_leaderboard_html_path,
     resolve_mlflow_config,
-    write_tracking_artifact,
     _metrics_for_task,
     _normalize_model_metrics,
 )
@@ -65,63 +63,37 @@ class TestMlflowTrackingHelpers:
         url = build_mlflow_run_url("https://mlflow.example.com/", "5", "abc123")
         assert url == "https://mlflow.example.com/#/experiments/5/runs/abc123"
 
-    def test_build_tracking_artifact_payload_disabled(self, monkeypatch):
-        """Emit minimal payload when tracking is disabled."""
+    def test_build_mlflow_stage_map_block_disabled(self, monkeypatch):
+        """Emit minimal mlflow block when tracking is disabled."""
         monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
-        payload = build_tracking_artifact_payload(
-            pipeline_name="autogluon-tabular-training-pipeline",
-            kfp_run_id="run-1",
-        )
-        assert payload == {
-            "tracking_enabled": False,
-            "tracking_mode": "disabled",
-            "kfp_run_id": "run-1",
-            "pipeline_name": "autogluon-tabular-training-pipeline",
-        }
+        block = build_mlflow_stage_map_block()
+        assert block == {"tracking_enabled": False}
 
-    def test_build_tracking_artifact_payload_connection(self, monkeypatch):
-        """Include connection mode metadata when only URI is available."""
+    def test_build_mlflow_stage_map_block_connection_uri_only(self, monkeypatch):
+        """Include tracking URI when only MLFLOW_TRACKING_URI is available."""
         monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
         monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
-        payload = build_tracking_artifact_payload(
-            pipeline_name="autogluon-tabular-training-pipeline",
-            kfp_run_id="run-1",
-        )
-        assert payload["tracking_enabled"] is True
-        assert payload["tracking_mode"] == "connection"
-        assert payload["mlflow_tracking_uri"] == "https://mlflow.example.com"
+        block = build_mlflow_stage_map_block()
+        assert block == {
+            "tracking_enabled": True,
+            "tracking_uri": "https://mlflow.example.com",
+        }
 
-    def test_build_tracking_artifact_payload_enabled(self, monkeypatch):
+    def test_build_mlflow_stage_map_block_kfp_mode(self, monkeypatch):
         """Include MLflow IDs when tracking is enabled in KFP mode."""
         monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
         monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "7")
         monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
         monkeypatch.setenv("MLFLOW_WORKSPACE", "ds-project")
-        payload = build_tracking_artifact_payload(
-            pipeline_name="autogluon-tabular-training-pipeline",
-            kfp_run_id="run-1",
-            kfp_run_name="my-run",
-        )
-        assert payload["tracking_enabled"] is True
-        assert payload["tracking_mode"] == "kfp"
-        assert payload["mlflow_experiment_id"] == "7"
-        assert payload["mlflow_run_id"] == "parent-run"
-        assert payload["kfp_run_name"] == "my-run"
-        assert "mlflow_run_url" in payload
-
-    def test_write_tracking_artifact(self, tmp_path, monkeypatch):
-        """Write mlflow_tracking.json under the artifact directory."""
-        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
-        output_file = write_tracking_artifact(
-            tmp_path,
-            pipeline_name="autogluon-tabular-training-pipeline",
-            kfp_run_id="run-abc",
-        )
-        assert output_file == tmp_path / TRACKING_ARTIFACT_FILENAME
-        payload = json.loads(output_file.read_text(encoding="utf-8"))
-        assert payload["tracking_enabled"] is False
-        assert payload["kfp_run_id"] == "run-abc"
-        assert (tmp_path / "data").read_text(encoding="utf-8") == output_file.read_text(encoding="utf-8")
+        block = build_mlflow_stage_map_block()
+        assert block == {
+            "tracking_enabled": True,
+            "tracking_uri": "https://mlflow.example.com",
+            "experiment_id": "7",
+            "run_id": "parent-run",
+            "workspace": "ds-project",
+            "run_url": "https://mlflow.example.com/#/experiments/7/runs/parent-run",
+        }
 
     @pytest.mark.parametrize(
         ("model_name", "expected_type", "expected_level"),

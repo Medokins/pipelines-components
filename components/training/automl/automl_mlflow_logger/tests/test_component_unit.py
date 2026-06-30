@@ -18,15 +18,6 @@ def component_status_artifact(tmp_path):
     return artifact
 
 
-@pytest.fixture
-def mlflow_tracking_artifact(tmp_path):
-    """Mock KFP output artifact for mlflow_tracking_artifact."""
-    artifact = mock.MagicMock()
-    artifact.path = str(tmp_path / "mlflow_tracking")
-    artifact.metadata = {}
-    return artifact
-
-
 def _make_models_artifact(base_path: Path, model_names: list[str]):
     artifact = mock.MagicMock()
     artifact.path = str(base_path)
@@ -61,13 +52,12 @@ class TestAutomlMlflowLogger:
         mock_log,
         tmp_path,
         component_status_artifact,
-        mlflow_tracking_artifact,
     ):
         """Delegates to shared logger and records status when MLflow is disabled."""
         model_name = "LightGBM_BAG_L1_FULL"
         metrics_dir = tmp_path / model_name / "metrics"
         metrics_dir.mkdir(parents=True)
-        (metrics_dir / "metrics.json").write_text(json.dumps({"accuracy": 0.9}), encoding="utf-8")
+        (metrics_dir / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
         html_path = tmp_path / "leaderboard.html"
         html_path.write_text("<html></html>", encoding="utf-8")
 
@@ -79,15 +69,13 @@ class TestAutomlMlflowLogger:
             run_id="run-1",
             task_type="binary",
             component_status=component_status_artifact,
-            mlflow_tracking_artifact=mlflow_tracking_artifact,
             preset="speed",
             top_n=1,
         )
 
         mock_log.assert_called_once()
-        tracking_file = Path(mlflow_tracking_artifact.path) / "mlflow_tracking.json"
-        assert tracking_file.is_file()
         assert component_status_artifact.metadata["display_name"] == "MLflow Logging Status"
+        assert component_status_artifact.metadata["tracking_enabled"] == "False"
 
     @mock.patch(
         "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
@@ -100,14 +88,13 @@ class TestAutomlMlflowLogger:
             },
         ),
     )
-    def test_writes_tracking_artifact_after_connection_logging(
+    def test_records_metadata_after_connection_logging(
         self,
         mock_log,
         tmp_path,
         component_status_artifact,
-        mlflow_tracking_artifact,
     ):
-        """Write final tracking artifact with MLflow run IDs after successful logging."""
+        """Record MLflow run IDs on component_status metadata after successful logging."""
         html_path = tmp_path / "leaderboard.html"
         html_path.write_text("<html></html>", encoding="utf-8")
 
@@ -119,16 +106,13 @@ class TestAutomlMlflowLogger:
             run_id="run-1",
             task_type="binary",
             component_status=component_status_artifact,
-            mlflow_tracking_artifact=mlflow_tracking_artifact,
         )
 
         mock_log.assert_called_once()
-        payload = json.loads(
-            (Path(mlflow_tracking_artifact.path) / "mlflow_tracking.json").read_text(encoding="utf-8")
-        )
-        assert payload["mlflow_run_id"] == "run-abc"
-        assert payload["mlflow_experiment_id"] == "7"
-        assert payload["tracking_mode"] == "connection"
+        assert component_status_artifact.metadata["tracking_enabled"] == "True"
+        assert component_status_artifact.metadata["mlflow_run_id"] == "run-abc"
+        assert component_status_artifact.metadata["mlflow_experiment_id"] == "7"
+        assert component_status_artifact.metadata["tracking_mode"] == "connection"
 
     @mock.patch(
         "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
@@ -145,7 +129,6 @@ class TestAutomlMlflowLogger:
         mock_log,
         tmp_path,
         component_status_artifact,
-        mlflow_tracking_artifact,
     ):
         """Step succeeds and records the MLflow error when logging fails."""
         html_path = tmp_path / "leaderboard.html"
@@ -159,17 +142,13 @@ class TestAutomlMlflowLogger:
             run_id="run-1",
             task_type="binary",
             component_status=component_status_artifact,
-            mlflow_tracking_artifact=mlflow_tracking_artifact,
         )
 
         mock_log.assert_called_once()
-        payload = json.loads(
-            (Path(mlflow_tracking_artifact.path) / "mlflow_tracking.json").read_text(encoding="utf-8")
-        )
-        assert "mlflow_error" in payload
-        assert mlflow_tracking_artifact.metadata["tracking_enabled"] == "False"
+        assert component_status_artifact.metadata["mlflow_error"] == '{"reason": "NotAcceptable", "code": 406}'
+        assert component_status_artifact.metadata["tracking_enabled"] == "False"
 
-    def test_rejects_empty_eval_metric(self, tmp_path, component_status_artifact, mlflow_tracking_artifact):
+    def test_rejects_empty_eval_metric(self, tmp_path, component_status_artifact):
         """Reject blank eval_metric."""
         with pytest.raises(TypeError, match="eval_metric"):
             automl_mlflow_logger.python_func(
@@ -180,10 +159,9 @@ class TestAutomlMlflowLogger:
                 run_id="run-1",
                 task_type="binary",
                 component_status=component_status_artifact,
-                mlflow_tracking_artifact=mlflow_tracking_artifact,
             )
 
-    def test_rejects_invalid_top_n(self, tmp_path, component_status_artifact, mlflow_tracking_artifact):
+    def test_rejects_invalid_top_n(self, tmp_path, component_status_artifact):
         """Reject non-positive top_n."""
         with pytest.raises(ValueError, match="top_n"):
             automl_mlflow_logger.python_func(
@@ -194,6 +172,5 @@ class TestAutomlMlflowLogger:
                 run_id="run-1",
                 task_type="binary",
                 component_status=component_status_artifact,
-                mlflow_tracking_artifact=mlflow_tracking_artifact,
                 top_n=0,
             )

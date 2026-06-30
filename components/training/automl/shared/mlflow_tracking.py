@@ -17,8 +17,6 @@ from typing import Any, Iterator, Literal
 
 logger = logging.getLogger(__name__)
 
-TRACKING_ARTIFACT_FILENAME = "mlflow_tracking.json"
-
 MlflowMode = Literal["disabled", "kfp", "connection"]
 
 # Default example secret name when documenting manual connection setup.
@@ -143,109 +141,36 @@ def resolve_leaderboard_html_path(html_artifact_path: str | Path) -> Path | None
     return None
 
 
-def build_tracking_artifact_payload(
+def build_mlflow_stage_map_block(
     *,
-    pipeline_name: str,
-    kfp_run_id: str,
-    kfp_run_name: str = "",
-    mlflow_run_id: str = "",
-    mlflow_experiment_id: str = "",
-    tracking_mode: str = "",
-    mlflow_error: str = "",
-    mlflow_child_run_ids: str = "",
-    mlflow_child_run_count: str = "",
-    mlflow_child_run_errors: str = "",
+    tracking_uri: str | None = None,
+    experiment_id: str | None = None,
+    run_id: str | None = None,
+    workspace: str | None = None,
 ) -> dict[str, Any]:
-    """Build the JSON payload for the KFP mlflow_tracking artifact."""
-    config = resolve_mlflow_config()
-    resolved_mode = tracking_mode or (config.mode if config else "disabled")
-    tracking_enabled = config is not None or bool(mlflow_run_id)
-    if tracking_enabled and resolved_mode == "disabled":
-        resolved_mode = "connection" if mlflow_run_id else (config.mode if config else "disabled")
+    """Build the ``mlflow`` object embedded in ``component_stage_map.json`` (ADR schema)."""
+    uri = (tracking_uri if tracking_uri is not None else os.getenv("MLFLOW_TRACKING_URI", "")).strip()
+    if not uri:
+        return {"tracking_enabled": False}
 
-    payload: dict[str, Any] = {
-        "tracking_enabled": tracking_enabled,
-        "tracking_mode": resolved_mode,
-        "kfp_run_id": kfp_run_id,
-        "pipeline_name": pipeline_name,
+    exp_id = (experiment_id if experiment_id is not None else os.getenv("MLFLOW_EXPERIMENT_ID", "")).strip()
+    parent_run_id = (run_id if run_id is not None else os.getenv("MLFLOW_RUN_ID", "")).strip()
+    ws = (workspace if workspace is not None else os.getenv("MLFLOW_WORKSPACE", "")).strip()
+
+    block: dict[str, Any] = {
+        "tracking_enabled": True,
+        "tracking_uri": uri,
     }
-    if kfp_run_name:
-        payload["kfp_run_name"] = kfp_run_name
-    if mlflow_error:
-        payload["mlflow_error"] = mlflow_error
-    if mlflow_child_run_ids:
-        payload["mlflow_child_run_ids"] = mlflow_child_run_ids
-    if mlflow_child_run_count:
-        payload["mlflow_child_run_count"] = mlflow_child_run_count
-    if mlflow_child_run_errors:
-        payload["mlflow_child_run_errors"] = mlflow_child_run_errors
-
-    if not tracking_enabled:
-        return payload
-
-    tracking_uri = config.tracking_uri if config else os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    experiment_id = mlflow_experiment_id or (config.experiment_id if config else "")
-    run_id = mlflow_run_id or (config.run_id if config else "")
-    workspace = config.workspace if config else os.getenv("MLFLOW_WORKSPACE", "").strip()
-    experiment_name = config.experiment_name if config else os.getenv("MLFLOW_EXPERIMENT_NAME", "").strip()
-    payload.update(
-        {
-            "mlflow_tracking_uri": tracking_uri,
-            "mlflow_experiment_id": experiment_id,
-            "mlflow_run_id": run_id,
-            "mlflow_workspace": workspace,
-            "mlflow_experiment_name": experiment_name,
-            "mlflow_run_url": build_mlflow_run_url(tracking_uri, experiment_id, run_id),
-        }
-    )
-    return payload
-
-
-def write_tracking_artifact(
-    artifact_path: str | Path,
-    *,
-    pipeline_name: str,
-    kfp_run_id: str,
-    kfp_run_name: str = "",
-    mlflow_run_id: str = "",
-    mlflow_experiment_id: str = "",
-    tracking_mode: str = "",
-    mlflow_error: str = "",
-    mlflow_child_run_ids: str = "",
-    mlflow_child_run_count: str = "",
-    mlflow_child_run_errors: str = "",
-) -> Path:
-    """Write mlflow_tracking.json under the KFP artifact directory."""
-    output_dir = Path(artifact_path)
-    if output_dir.is_file():
-        output_file = output_dir
-        output_dir = output_dir.parent
-    else:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / TRACKING_ARTIFACT_FILENAME
-    payload = build_tracking_artifact_payload(
-        pipeline_name=pipeline_name,
-        kfp_run_id=kfp_run_id,
-        kfp_run_name=kfp_run_name,
-        mlflow_run_id=mlflow_run_id,
-        mlflow_experiment_id=mlflow_experiment_id,
-        tracking_mode=tracking_mode,
-        mlflow_error=mlflow_error,
-        mlflow_child_run_ids=mlflow_child_run_ids,
-        mlflow_child_run_count=mlflow_child_run_count,
-        mlflow_child_run_errors=mlflow_child_run_errors,
-    )
-    payload_text = json.dumps(payload, indent=2)
-    with output_file.open("w", encoding="utf-8") as f:
-        f.write(payload_text)
-        f.flush()
-    # Some KFP/S3 artifact browsers expect a ``data`` object under the artifact prefix.
-    data_file = output_dir / "data"
-    if data_file != output_file:
-        with data_file.open("w", encoding="utf-8") as f:
-            f.write(payload_text)
-            f.flush()
-    return output_file
+    if exp_id:
+        block["experiment_id"] = exp_id
+    if parent_run_id:
+        block["run_id"] = parent_run_id
+    if ws:
+        block["workspace"] = ws
+    run_url = build_mlflow_run_url(uri, exp_id, parent_run_id)
+    if run_url:
+        block["run_url"] = run_url
+    return block
 
 
 def configure_mlflow_client(mlflow: Any, config: MlflowConfig) -> None:

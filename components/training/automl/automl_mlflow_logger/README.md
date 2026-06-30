@@ -13,8 +13,11 @@ model parameters. Open the parent run in the MLflow UI to see nested child runs.
 
 The logger reads ``MLFLOW_*`` environment variables mounted from the
 ``mlflow_connection_secret_name`` pipeline parameter. When ``MLFLOW_TRACKING_URI`` is unset,
-logging is skipped and the step completes successfully. API failures are recorded in
-``mlflow_tracking.json`` (``mlflow_error``) and do not fail the pipeline run.
+logging is skipped and the step completes successfully. API failures are recorded on
+``component_status`` artifact metadata (``mlflow_error``) and do not fail the pipeline run.
+
+MLflow discovery for dashboards uses the ``mlflow`` block in ``component_stage_map.json``
+(published at pipeline start). See [component_stage_map_publisher](../component_stage_map_publisher/README.md).
 
 ## Prerequisites
 
@@ -103,8 +106,7 @@ Verify in the ``automl-mlflow-logger`` pod logs: ``MLFLOW_TRACKING_URI=set`` and
 | `pipeline_name` | `str` | — | Pipeline name for MLflow tags. |
 | `run_id` | `str` | — | KFP run ID. |
 | `task_type` | `str` | — | `binary`, `multiclass`, `regression`, or `time_series`. |
-| `component_status` | `dsl.Output[dsl.Artifact]` | — | Stage progress artifact. |
-| `mlflow_tracking_artifact` | `dsl.Output[dsl.Artifact]` | — | Final MLflow tracking metadata JSON. |
+| `component_status` | `dsl.Output[dsl.Artifact]` | — | Stage progress artifact (includes MLflow run metadata when logging succeeds). |
 | `preset` | `str` | `speed` | Training preset logged on the parent run. |
 | `top_n` | `int` | `3` | Number of top models logged on the parent run. |
 
@@ -136,10 +138,8 @@ oc exec -n <project> <automl-mlflow-logger-pod> -c main -- env | grep MLFLOW
 The pipeline reached MLflow but the pipeline service account lacks workspace RBAC. Grant
 experiment permissions in ``MLFLOW_WORKSPACE`` or use ``MLFLOW_TRACKING_TOKEN`` in the secret.
 
-### S3 `NoSuchKey` when opening `mlflow_tracking_artifact` in the KFP UI
-
-The KFP UI may request the artifact prefix rather than ``mlflow_tracking.json``. Check run
-artifact metadata (``mlflow_run_id``, ``mlflow_error``) or open the run directly in MLflow.
+After a successful run, check ``component_status`` artifact metadata for ``mlflow_run_id`` and
+``mlflow_experiment_id``, or open the experiment directly in the MLflow UI.
 
 ## Metadata
 

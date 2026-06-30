@@ -15,7 +15,6 @@ def publish_component_stage_map(
     pipeline_id: str,
     run_id: str,
     component_stage_map: dsl.Output[dsl.Artifact],
-    mlflow_tracking_artifact: dsl.Output[dsl.Artifact],
 ) -> None:
     """Publish the component-to-stage-to-step map for dashboard consumption.
 
@@ -28,7 +27,6 @@ def publish_component_stage_map(
             (e.g. ``autogluon-tabular-training-pipeline``).
         run_id: KFP run ID for tracking (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``).
         component_stage_map: Output artifact containing the component-to-stage-to-step map.
-        mlflow_tracking_artifact: Output artifact with MLflow experiment/run IDs for dashboard deep-links.
 
     Raises:
         FileNotFoundError: If the template for ``pipeline_id`` is missing or empty.
@@ -49,6 +47,31 @@ def publish_component_stage_map(
         load_pipeline_run_status_manifest,
     )
 
+    def _build_mlflow_stage_map_block() -> dict:
+        """Build the ``mlflow`` block from pod env vars.
+
+        Inlined so the publisher does not depend on ``shared/mlflow_tracking.py`` being
+        installed in the runtime image (mirrors ``build_mlflow_stage_map_block`` there).
+        """
+        tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
+        if not tracking_uri:
+            return {"tracking_enabled": False}
+
+        block: dict = {"tracking_enabled": True, "tracking_uri": tracking_uri}
+        experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
+        if experiment_id:
+            block["experiment_id"] = experiment_id
+        parent_run_id = os.getenv("MLFLOW_RUN_ID", "").strip()
+        if parent_run_id:
+            block["run_id"] = parent_run_id
+        workspace = os.getenv("MLFLOW_WORKSPACE", "").strip()
+        if workspace:
+            block["workspace"] = workspace
+        if experiment_id and parent_run_id:
+            base = tracking_uri.rstrip("/")
+            block["run_url"] = f"{base}/#/experiments/{experiment_id}/runs/{parent_run_id}"
+        return block
+
     if not isinstance(pipeline_id, str) or not pipeline_id.strip():
         raise ValueError("pipeline_id must be a non-empty string")
     if not isinstance(run_id, str) or not run_id.strip():
@@ -65,6 +88,7 @@ def publish_component_stage_map(
 
     stage_map["kfp_run_id"] = run_id
     stage_map["published_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    stage_map["mlflow"] = _build_mlflow_stage_map_block()
 
     output_path = Path(component_stage_map.path)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -76,31 +100,10 @@ def publish_component_stage_map(
     component_stage_map.metadata["display_name"] = "Component Stage Map"
     component_stage_map.metadata["pipeline_id"] = pipeline_id
     component_stage_map.metadata["component_count"] = len(stage_map.get("components", []))
-
-    # Early placeholder; ``automl_mlflow_logger`` refreshes this after logging completes.
-    tracking_dir = Path(mlflow_tracking_artifact.path)
-    tracking_dir.mkdir(parents=True, exist_ok=True)
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    tracking_enabled = bool(tracking_uri)
-    tracking_mode = "disabled"
-    if tracking_enabled:
-        tracking_mode = "kfp" if os.getenv("MLFLOW_RUN_ID", "").strip() else "connection"
-    tracking_file = tracking_dir / "mlflow_tracking.json"
-    with tracking_file.open("w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "tracking_enabled": tracking_enabled,
-                "tracking_mode": tracking_mode,
-                "kfp_run_id": run_id,
-                "pipeline_name": pipeline_id,
-            },
-            f,
-            indent=2,
-        )
-    mlflow_tracking_artifact.metadata["display_name"] = "MLflow Tracking Info"
-    mlflow_tracking_artifact.metadata["tracking_enabled"] = str(tracking_enabled)
-    if tracking_enabled:
-        mlflow_tracking_artifact.metadata["tracking_mode"] = tracking_mode
+    mlflow_block = stage_map["mlflow"]
+    component_stage_map.metadata["mlflow_tracking_enabled"] = str(
+        mlflow_block.get("tracking_enabled", False)
+    )
 
     component_count = len(stage_map.get("components", []))
     stage_count = sum(len(c.get("stages", [])) for c in stage_map.get("components", []))
@@ -108,4 +111,4 @@ def publish_component_stage_map(
     print(f"  - Components: {component_count}")
     print(f"  - Total stages: {stage_count}")
     print(f"  - Published to: {output_file}")
-    print(f"  - MLflow tracking artifact: {tracking_file}")
+    print(f"  - MLflow tracking enabled: {mlflow_block.get('tracking_enabled', False)}")

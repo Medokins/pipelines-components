@@ -19,7 +19,6 @@ def automl_mlflow_logger(
     run_id: str,
     task_type: str,
     component_status: dsl.Output[dsl.Artifact],
-    mlflow_tracking_artifact: dsl.Output[dsl.Artifact],
     preset: str = "speed",
     top_n: int = 3,
     embedded_artifact: dsl.EmbeddedInput[dsl.Dataset] = None,
@@ -41,7 +40,6 @@ def automl_mlflow_logger(
         run_id: KFP run ID (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``).
         task_type: ML task type (``binary``, ``multiclass``, ``regression``, or ``time_series``).
         component_status: Output artifact with stage progress (``component_status.json``).
-        mlflow_tracking_artifact: Final MLflow tracking metadata including run IDs when logging succeeds.
         preset: Training quality preset logged on the parent run.
         top_n: Number of top models logged on the parent run.
         embedded_artifact: Embedded ``mlflow_tracking.py`` helper injected by KFP at compile time.
@@ -58,16 +56,13 @@ def automl_mlflow_logger(
 
     from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
 
-    def _load_mlflow_tracking_helpers():
+    def _load_log_automl_results():
         try:
             from kfp_components.components.training.automl.shared.mlflow_tracking import (
                 log_automl_results as _log_automl_results,
             )
-            from kfp_components.components.training.automl.shared.mlflow_tracking import (
-                write_tracking_artifact as _write_tracking_artifact,
-            )
 
-            return _log_automl_results, _write_tracking_artifact
+            return _log_automl_results
         except ModuleNotFoundError:
             if embedded_artifact is None:
                 raise
@@ -86,9 +81,9 @@ def automl_mlflow_logger(
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            return module.log_automl_results, module.write_tracking_artifact
+            return module.log_automl_results
 
-    log_automl_results, write_tracking_artifact = _load_mlflow_tracking_helpers()
+    log_automl_results = _load_log_automl_results()
 
     logger = logging.getLogger(__name__)
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
@@ -132,37 +127,24 @@ def automl_mlflow_logger(
             top_n=top_n,
         )
 
-        tracking_file = write_tracking_artifact(
-            mlflow_tracking_artifact.path,
-            pipeline_name=pipeline_name,
-            kfp_run_id=run_id,
-            kfp_run_name=pipeline_name,
-            mlflow_run_id=tracking_info.get("mlflow_run_id", ""),
-            mlflow_experiment_id=tracking_info.get("mlflow_experiment_id", ""),
-            tracking_mode=tracking_info.get("tracking_mode", ""),
-            mlflow_error=tracking_info.get("error", ""),
-            mlflow_child_run_ids=tracking_info.get("mlflow_child_run_ids", ""),
-            mlflow_child_run_count=tracking_info.get("mlflow_child_run_count", ""),
-            mlflow_child_run_errors=tracking_info.get("mlflow_child_run_errors", ""),
-        )
-        mlflow_tracking_artifact.metadata["display_name"] = "MLflow Tracking Info"
-        mlflow_tracking_artifact.metadata["tracking_enabled"] = str(logged)
+        component_status.metadata["display_name"] = "MLflow Logging Status"
+        component_status.metadata["tracking_enabled"] = str(logged)
         if tracking_info.get("mlflow_run_id"):
-            mlflow_tracking_artifact.metadata["mlflow_run_id"] = tracking_info["mlflow_run_id"]
+            component_status.metadata["mlflow_run_id"] = tracking_info["mlflow_run_id"]
         if tracking_info.get("mlflow_experiment_id"):
-            mlflow_tracking_artifact.metadata["mlflow_experiment_id"] = tracking_info["mlflow_experiment_id"]
+            component_status.metadata["mlflow_experiment_id"] = tracking_info["mlflow_experiment_id"]
         if tracking_info.get("tracking_mode"):
-            mlflow_tracking_artifact.metadata["tracking_mode"] = tracking_info["tracking_mode"]
+            component_status.metadata["tracking_mode"] = tracking_info["tracking_mode"]
         if tracking_info.get("error"):
-            mlflow_tracking_artifact.metadata["mlflow_error"] = tracking_info["error"]
+            component_status.metadata["mlflow_error"] = tracking_info["error"]
         if tracking_uri:
-            mlflow_tracking_artifact.metadata["mlflow_tracking_uri"] = tracking_uri
+            component_status.metadata["mlflow_tracking_uri"] = tracking_uri
         if tracking_info.get("mlflow_child_run_count"):
-            mlflow_tracking_artifact.metadata["mlflow_child_run_count"] = tracking_info["mlflow_child_run_count"]
+            component_status.metadata["mlflow_child_run_count"] = tracking_info["mlflow_child_run_count"]
         if tracking_info.get("mlflow_child_run_ids"):
-            mlflow_tracking_artifact.metadata["mlflow_child_run_ids"] = tracking_info["mlflow_child_run_ids"]
+            component_status.metadata["mlflow_child_run_ids"] = tracking_info["mlflow_child_run_ids"]
         if tracking_info.get("mlflow_child_run_errors"):
-            mlflow_tracking_artifact.metadata["mlflow_child_run_errors"] = tracking_info["mlflow_child_run_errors"]
+            component_status.metadata["mlflow_child_run_errors"] = tracking_info["mlflow_child_run_errors"]
 
         if logged:
             logger.info("MLflow logging completed for pipeline run %s.", run_id)
@@ -184,23 +166,3 @@ def automl_mlflow_logger(
                 tracking_enabled=False,
                 mlflow_error=mlflow_error or None,
             )
-
-        component_status.metadata["display_name"] = "MLflow Logging Status"
-        for label, artifact_path in (
-            ("component_status", component_status.path),
-            ("mlflow_tracking_artifact", mlflow_tracking_artifact.path),
-        ):
-            path = Path(artifact_path)
-            if path.is_dir():
-                files = sorted(path.iterdir())
-            elif path.is_file():
-                files = [path]
-            else:
-                files = []
-            logger.info(
-                "Output artifact %s path=%s files=%s",
-                label,
-                artifact_path,
-                [str(file) for file in files],
-            )
-        print(f"MLflow tracking artifact written to: {tracking_file}")
