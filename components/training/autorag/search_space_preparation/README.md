@@ -18,7 +18,7 @@ Thin wrapper that delegates to ``ai4rag.components.optimization.search_space_pre
 | `embedded_artifact` | `dsl.EmbeddedInput[dsl.Dataset]` | `None` | Embedded ``autorag.shared`` helpers injected by KFP at runtime. |
 | `embedding_models` | `Optional[List]` | `None` | List of embedding model identifiers to try. |
 | `generation_models` | `Optional[List]` | `None` | List of generation model identifiers to try. |
-| `metric` | `str` | `None` | Quality metric for evaluation (e.g. "faithfulness"). |
+| `metric` | `str` | `None` | Deprecated / ignored. Optimization metric is applied in `rag_templates_optimization`. Kept for pipeline-parameter compatibility. |
 | `component_status` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing stage-level progress tracking. |
 
 ## Usage Examples 🧪
@@ -31,14 +31,8 @@ from kfp_components.components.training.autorag.search_space_preparation import 
 
 
 @dsl.pipeline(name="search-space-preparation-example")
-def example_pipeline(
-    metric: str = "faithfulness",
-):
-    """Example pipeline using search_space_preparation.
-
-    Args:
-        metric: Evaluation metric name.
-    """
+def example_pipeline():
+    """Example pipeline using search_space_preparation."""
     test_data = dsl.importer(
         artifact_uri="gs://placeholder/test_data",
         artifact_class=dsl.Artifact,
@@ -50,7 +44,6 @@ def example_pipeline(
     search_space_preparation(
         test_data=test_data.output,
         extracted_text=extracted_text.output,
-        metric=metric,
     )
 
 ```

@@ -19,6 +19,12 @@ def text_extraction(
     embedded_artifact: dsl.EmbeddedInput[dsl.Dataset] = None,
     error_tolerance: Optional[float] = None,
     max_extraction_workers: Optional[int] = None,
+    do_ocr: bool = False,
+    ocr_lang: Optional[str] = None,
+    ocr_det_model_path: Optional[str] = None,
+    ocr_cls_model_path: Optional[str] = None,
+    ocr_rec_model_path: Optional[str] = None,
+    ocr_rec_keys_path: Optional[str] = None,
 ):
     """Text Extraction component.
 
@@ -35,6 +41,13 @@ def text_extraction(
             raising an error. None (the default) means zero tolerance.
         max_extraction_workers: Number of parallel worker processes used for text
             extraction. Defaults to 4. Set to None to use all available CPU cores.
+        do_ocr: Enable RapidOCR via Docling for scanned PDFs / images. Off by default.
+        ocr_lang: RapidOCR language (e.g. ``"english"`` or ``"chinese"``). When None,
+            ai4rag defaults to English.
+        ocr_det_model_path: Optional local path to a custom RapidOCR detection ONNX model.
+        ocr_cls_model_path: Optional local path to a custom RapidOCR classification ONNX model.
+        ocr_rec_model_path: Optional local path to a custom RapidOCR recognition ONNX model.
+        ocr_rec_keys_path: Optional local path to a custom RapidOCR recognition keys file.
     """
     import importlib.util
     import json
@@ -84,6 +97,12 @@ def text_extraction(
                 error_tolerance=error_tolerance,
                 max_extraction_workers=max_extraction_workers,
                 docling_artifacts_path=os.environ.get("DOCLING_ARTIFACTS_PATH"),
+                do_ocr=do_ocr,
+                ocr_lang=ocr_lang,
+                ocr_det_model_path=ocr_det_model_path,
+                ocr_cls_model_path=ocr_cls_model_path,
+                ocr_rec_model_path=ocr_rec_model_path,
+                ocr_rec_keys_path=ocr_rec_keys_path,
             )
 
 

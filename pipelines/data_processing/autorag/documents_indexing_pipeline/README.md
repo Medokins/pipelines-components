@@ -23,6 +23,8 @@ Defines a pipeline to load, sample, extract text, and index documents for AutoRA
 | `chunk_size` | `int` | `1024` | Chunk size in characters. |
 | `chunk_overlap` | `int` | `0` | Chunk overlap in characters. |
 | `batch_size` | `int` | `20` | Number of documents per batch (0 = process all at once). |
+| `do_ocr` | `bool` | `False` | Enable RapidOCR during text extraction (scanned PDFs / images). |
+| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language (e.g. `english`). When None, ai4rag defaults to English. |
 
 ## Metadata 🗂️
 

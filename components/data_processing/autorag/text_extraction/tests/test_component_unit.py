@@ -48,8 +48,12 @@ class TestTextExtractionUnitTests:
         assert "extracted_text" in params
         assert "error_tolerance" in params
         assert "max_extraction_workers" in params
+        assert "do_ocr" in params
+        assert "ocr_lang" in params
         assert sig.parameters["error_tolerance"].default is None
         assert sig.parameters["max_extraction_workers"].default is None
+        assert sig.parameters["do_ocr"].default is False
+        assert sig.parameters["ocr_lang"].default is None
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_delegates_to_ai4rag_extract_text(self, tmp_path):
@@ -78,6 +82,8 @@ class TestTextExtractionUnitTests:
                 extracted_text=output_artifact,
                 error_tolerance=0.1,
                 max_extraction_workers=4,
+                do_ocr=True,
+                ocr_lang="english",
             )
 
         assert output_dir.exists()
@@ -92,6 +98,12 @@ class TestTextExtractionUnitTests:
             error_tolerance=0.1,
             max_extraction_workers=4,
             docling_artifacts_path=None,
+            do_ocr=True,
+            ocr_lang="english",
+            ocr_det_model_path=None,
+            ocr_cls_model_path=None,
+            ocr_rec_model_path=None,
+            ocr_rec_keys_path=None,
         )
 
     @mock.patch.dict(
@@ -145,6 +157,47 @@ class TestTextExtractionUnitTests:
         call_kwargs = mock_extract.call_args.kwargs
         assert call_kwargs["error_tolerance"] is None
         assert call_kwargs["max_extraction_workers"] is None
+        assert call_kwargs["do_ocr"] is False
+        assert call_kwargs["ocr_lang"] is None
+        assert call_kwargs["ocr_det_model_path"] is None
+        assert call_kwargs["ocr_cls_model_path"] is None
+        assert call_kwargs["ocr_rec_model_path"] is None
+        assert call_kwargs["ocr_rec_keys_path"] is None
+
+    @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
+    def test_custom_ocr_model_paths_forwarded(self, tmp_path):
+        """Custom RapidOCR ONNX paths are forwarded to extract_text."""
+        modules, mock_extract = _make_ai4rag_mocks()
+
+        descriptor_dir = tmp_path / "descriptor"
+        descriptor_dir.mkdir()
+        descriptor = {"bucket": "b", "documents": [{"key": "a.png", "size_bytes": 100}]}
+        (descriptor_dir / "documents_descriptor.json").write_text(json.dumps(descriptor), encoding="utf-8")
+
+        descriptor_artifact = mock.MagicMock()
+        descriptor_artifact.path = str(descriptor_dir)
+        output_artifact = mock.MagicMock()
+        output_artifact.path = str(tmp_path / "output")
+
+        with mock.patch.dict("sys.modules", modules):
+            text_extraction.python_func(
+                documents_descriptor=descriptor_artifact,
+                extracted_text=output_artifact,
+                do_ocr=True,
+                ocr_lang="chinese",
+                ocr_det_model_path="/models/det.onnx",
+                ocr_cls_model_path="/models/cls.onnx",
+                ocr_rec_model_path="/models/rec.onnx",
+                ocr_rec_keys_path="/models/keys.txt",
+            )
+
+        call_kwargs = mock_extract.call_args.kwargs
+        assert call_kwargs["do_ocr"] is True
+        assert call_kwargs["ocr_lang"] == "chinese"
+        assert call_kwargs["ocr_det_model_path"] == "/models/det.onnx"
+        assert call_kwargs["ocr_cls_model_path"] == "/models/cls.onnx"
+        assert call_kwargs["ocr_rec_model_path"] == "/models/rec.onnx"
+        assert call_kwargs["ocr_rec_keys_path"] == "/models/keys.txt"
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_propagates_ai4rag_exception(self, tmp_path):

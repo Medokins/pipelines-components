@@ -52,6 +52,8 @@ def documents_rag_optimization_pipeline(
     generation_models: Optional[List] = None,
     optimization_metric: str = "faithfulness",
     optimization_max_rag_patterns: int = 8,
+    do_ocr: bool = False,
+    ocr_lang: Optional[str] = None,
 ):
     """Automated system for building and optimizing Retrieval-Augmented Generation (RAG) applications.
 
@@ -90,6 +92,8 @@ def documents_rag_optimization_pipeline(
             "faithfulness", "answer_correctness", "context_correctness".
         optimization_max_rag_patterns: Maximum number of RAG patterns to generate. Passed to ai4rag
             (max_number_of_rag_patterns). Defaults to 8.
+        do_ocr: Enable RapidOCR during text extraction (scanned PDFs / images). Off by default.
+        ocr_lang: RapidOCR language (e.g. ``"english"``). When None, ai4rag defaults to English.
     """
     component_stage_map_task = publish_component_stage_map(
         pipeline_id=PIPELINE_NAME,
@@ -124,6 +128,8 @@ def documents_rag_optimization_pipeline(
 
     text_extraction_task = text_extraction(
         documents_descriptor=documents_discovery_task.outputs["discovered_documents"],
+        do_ocr=do_ocr,
+        ocr_lang=ocr_lang,
     )
 
     text_extraction_task.set_caching_options(False)

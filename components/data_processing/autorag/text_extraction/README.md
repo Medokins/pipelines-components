@@ -18,6 +18,12 @@ Thin wrapper that delegates to ``ai4rag.components.data.text_extraction.extract_
 | `embedded_artifact` | `dsl.EmbeddedInput[dsl.Dataset]` | `None` | Embedded ``autorag.shared`` helpers injected by KFP at runtime. |
 | `error_tolerance` | `Optional[float]` | `None` | Fraction of documents (0.0-1.0) allowed to fail without raising an error. None (the default) means zero tolerance. |
 | `max_extraction_workers` | `Optional[int]` | `None` | Number of parallel worker processes used for text extraction. Defaults to 4. Set to None to use all available CPU cores. |
+| `do_ocr` | `bool` | `False` | Enable RapidOCR via Docling for scanned PDFs / images. |
+| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language (e.g. `english`). When None, ai4rag defaults to English. |
+| `ocr_det_model_path` | `Optional[str]` | `None` | Optional local path to a custom RapidOCR detection ONNX model. |
+| `ocr_cls_model_path` | `Optional[str]` | `None` | Optional local path to a custom RapidOCR classification ONNX model. |
+| `ocr_rec_model_path` | `Optional[str]` | `None` | Optional local path to a custom RapidOCR recognition ONNX model. |
+| `ocr_rec_keys_path` | `Optional[str]` | `None` | Optional local path to a custom RapidOCR recognition keys file. |
 
 ## Usage Examples 🧪
 

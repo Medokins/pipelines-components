@@ -36,7 +36,9 @@ def search_space_preparation(
         embedded_artifact: Embedded ``autorag.shared`` helpers injected by KFP at runtime.
         embedding_models: List of embedding model identifiers to try.
         generation_models: List of generation model identifiers to try.
-        metric: Quality metric for evaluation (e.g. "faithfulness").
+        metric: Deprecated. Ignored here; optimization metric is applied in
+            ``rag_templates_optimization`` via ``optimization_settings``. Kept for
+            pipeline-parameter backward compatibility.
 
     Environment variables (required):
         OGX_CLIENT_BASE_URL, OGX_CLIENT_API_KEY.
@@ -77,6 +79,13 @@ def search_space_preparation(
             status.set_metadata(display_name="Search Space Preparation Status")
             component_status.metadata["display_name"] = "Search Space Preparation Status"
         with status.stage("prepare_search_space"):
+            if metric is not None:
+                logging.getLogger(__name__).info(
+                    "Ignoring search_space_preparation metric=%r; ai4rag no longer "
+                    "accepts metric here. Pass optimization_metric to rag_templates_optimization.",
+                    metric,
+                )
+
             ogx_client = create_ogx_client(
                 base_url=os.environ["OGX_CLIENT_BASE_URL"],
                 api_key=os.environ["OGX_CLIENT_API_KEY"],
@@ -88,7 +97,6 @@ def search_space_preparation(
                 ogx_client=ogx_client,
                 embedding_models=embedding_models,
                 generation_models=generation_models,
-                metric=metric if metric is not None else "faithfulness",
             )
 
             report.save_json(search_space_prep_report.path)

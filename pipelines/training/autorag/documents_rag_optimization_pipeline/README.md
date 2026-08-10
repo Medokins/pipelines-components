@@ -28,6 +28,8 @@ The system integrates with OGX API for inference and vector database operations,
 | `generation_models` | `Optional[List]` | `None` | Optional list of foundation/generation model identifiers to use in the search space. |
 | `optimization_metric` | `str` | `faithfulness` | Quality metric used to optimize RAG patterns. Supported values: "faithfulness", "answer_correctness", "context_correctness". |
 | `optimization_max_rag_patterns` | `int` | `8` | Maximum number of RAG patterns to generate. Passed to ai4rag (max_number_of_rag_patterns). Defaults to 8. |
+| `do_ocr` | `bool` | `False` | Enable RapidOCR during text extraction (scanned PDFs / images). |
+| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language (e.g. `english`). When None, ai4rag defaults to English. |
 
 ## Metadata 🗂️
 

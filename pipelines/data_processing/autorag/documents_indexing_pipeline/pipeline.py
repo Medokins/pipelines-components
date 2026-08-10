@@ -33,6 +33,8 @@ def documents_indexing_pipeline(
     chunk_size: int = 1024,
     chunk_overlap: int = 0,
     batch_size: int = 20,
+    do_ocr: bool = False,
+    ocr_lang: Optional[str] = None,
 ):
     """Defines a pipeline to load, sample, extract text, and index documents for AutoRAG.
 
@@ -52,6 +54,8 @@ def documents_indexing_pipeline(
         chunk_size: Chunk size in characters.
         chunk_overlap: Chunk overlap in characters.
         batch_size: Number of documents per batch (0 = process all at once).
+        do_ocr: Enable RapidOCR during text extraction (scanned PDFs / images). Off by default.
+        ocr_lang: RapidOCR language (e.g. ``"english"``). When None, ai4rag defaults to English.
     """
     documents_discovery_task = documents_discovery(
         input_data_bucket_name=input_data_bucket_name,
@@ -64,6 +68,8 @@ def documents_indexing_pipeline(
 
     text_extraction_task = text_extraction(
         documents_descriptor=documents_discovery_task.outputs["discovered_documents"],
+        do_ocr=do_ocr,
+        ocr_lang=ocr_lang,
     )
     text_extraction_task.set_caching_options(False)
     text_extraction_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(

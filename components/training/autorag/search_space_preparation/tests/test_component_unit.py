@@ -97,13 +97,12 @@ class TestSearchSpacePreparationUnitTests:
             ogx_client=mock_ogx_client,
             embedding_models=["embed-1", "embed-2"],
             generation_models=["gen-1"],
-            metric="answer_correctness",
         )
         mock_report.save_json.assert_called_once_with(str(tmp_path / "report.yml"))
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
-    def test_default_metric_is_faithfulness(self, tmp_path):
-        """When metric is None, 'faithfulness' is passed as default."""
+    def test_metric_is_not_forwarded_to_ai4rag(self, tmp_path):
+        """metric is accepted for compatibility but not passed to prepare_search_space_report."""
         modules, mock_create_ogx, mock_prepare, _ = _make_ai4rag_mocks()
         mock_create_ogx.return_value = mock.MagicMock()
         mock_prepare.return_value = mock.MagicMock()
@@ -120,9 +119,10 @@ class TestSearchSpacePreparationUnitTests:
                 test_data=test_data,
                 extracted_text=extracted_text,
                 search_space_prep_report=report,
+                metric="answer_correctness",
             )
 
-        assert mock_prepare.call_args.kwargs["metric"] == "faithfulness"
+        assert "metric" not in mock_prepare.call_args.kwargs
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_none_models_passed_through(self, tmp_path):
