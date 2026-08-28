@@ -56,6 +56,10 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
             "top_n",
             "preset",
             "eval_metric",
+            "mlflow_connection_secret_name",
+            "register_best_model",
+            "model_registry_name",
+            "target_stage",
         }
         inputs = autogluon_timeseries_training_pipeline.component_spec.inputs
         params = set(inputs.keys())
@@ -65,6 +69,10 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
         assert inputs["known_covariates_names"].default == []
         assert inputs["preset"].default == "speed"
         assert inputs["eval_metric"].default == "mean_absolute_scaled_error"
+        assert inputs["mlflow_connection_secret_name"].default == ""
+        assert inputs["register_best_model"].default is False
+        assert inputs["model_registry_name"].default == ""
+        assert inputs["target_stage"].default == ""
 
     def test_compiled_pipeline_has_expected_inputs(self):
         """Test that compiled pipeline YAML contains expected pipeline input names."""
@@ -139,6 +147,26 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
 
         assert "componentInputParameter: preset" in content
         assert "condition-branches-1" in content
+
+    def test_compiled_pipeline_wires_mlflow_logger_in_both_branches(self):
+        """MLflow logger runs in both preset branches and exposes registry pipeline inputs."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+        try:
+            compiler.Compiler().compile(
+                pipeline_func=autogluon_timeseries_training_pipeline,
+                package_path=tmp_path,
+            )
+            content = Path(tmp_path).read_text(encoding="utf-8")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        assert "exec-automl-mlflow-logger:" in content
+        assert "exec-automl-mlflow-logger-2:" in content
+        assert "componentInputParameter: mlflow_connection_secret_name" in content
+        assert "componentInputParameter: register_best_model" in content
+        assert "componentInputParameter: model_registry_name" in content
+        assert "componentInputParameter: target_stage" in content
 
     def test_compiled_pipeline_declares_speed_and_balanced_resource_tiers(self):
         """Speed and balanced preset branches request different training CPU/memory."""

@@ -3,6 +3,7 @@
 autogluon.tabular[lightgbm,xgboost,tabm,fastai]==1.5.0+rhaiv.5
 autogluon.timeseries==1.5.0+rhaiv.5
 boto3
+mlflow
 pandas==2.2.3
 ipython
 kfp==2.16.1

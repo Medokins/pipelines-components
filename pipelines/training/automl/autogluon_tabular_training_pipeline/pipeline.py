@@ -1,13 +1,28 @@
 from kfp import dsl
 from kfp_components.components.data_processing.automl.tabular_data_loader import automl_data_loader
 from kfp_components.components.training.automl.autogluon_models_training import autogluon_models_training
+from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
+from kfp_components.components.training.automl.shared.mlflow_tracking import (  # pyright: ignore[reportMissingImports]
+    MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
+)
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
 
 # Must match run_status_templates/pipelines/<name>.json
 PIPELINE_NAME = "autogluon-tabular-training-pipeline"
+
+
+def _mount_mlflow_connection_secret(task, secret_name: str) -> None:
+    """Mount MLflow ``MLFLOW_*`` env vars on the logger step from the connection secret.
+
+    Optional so an unset/absent secret leaves ``MLFLOW_TRACKING_URI`` empty and the logger
+    skips tracking (the step still succeeds).
+    """
+    from kfp.kubernetes import use_secret_as_env
+
+    use_secret_as_env(task, secret_name, MLFLOW_CONNECTION_SECRET_KEY_TO_ENV, optional=True)
 
 
 @dsl.pipeline(
@@ -41,6 +56,10 @@ def autogluon_tabular_training_pipeline(
     positive_class: str = "",
     eval_metric: str = "",
     preset: str = "speed",
+    mlflow_connection_secret_name: str = "",
+    register_best_model: bool = False,
+    model_registry_name: str = "",
+    target_stage: str = "",
 ):
     """AutoGluon Tabular Training Pipeline.
 
@@ -121,6 +140,10 @@ def autogluon_tabular_training_pipeline(
         positive_class: Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values.
         eval_metric: Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification.
         preset: Training quality tier. "speed" (default, 4 vCPU / 16 GiB) or "balanced" (may run more than 2x longer, 8 vCPU / 32 GiB).
+        mlflow_connection_secret_name: Optional Kubernetes secret providing MLflow tracking env vars (MLFLOW_TRACKING_URI, etc.), mounted on the MLflow logger step only. Empty (default) disables MLflow logging; the step still succeeds.
+        register_best_model: When True, register the best model in the MLflow Model Registry (requires model_registry_name).
+        model_registry_name: Registered-model name to use when register_best_model is True.
+        target_stage: Optional deployment-stage value set as a "target_stage" tag on the registered best-model version.
 
     Returns:
         HTML artifact with leaderboard of refitted models ranked by task_type metric (e.g. accuracy, r2).
@@ -200,12 +223,36 @@ def autogluon_tabular_training_pipeline(
         preset=preset,
         eval_metric=eval_metric,
     )
+
+    def _add_mlflow_logger(training_task):
+        # MLflow logging runs after training in each branch. It never fails the pipeline:
+        # missing tracking config or MLflow errors are recorded on component_status only.
+        mlflow_logger_task = automl_mlflow_logger(
+            models_artifact=training_task.outputs["models_artifact"],
+            html_artifact=training_task.outputs["html_artifact"],
+            eval_metric=training_task.outputs["eval_metric"],
+            pipeline_name=PIPELINE_NAME,
+            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+            run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+            task_type=task_type,
+            preset=preset,
+            top_n=top_n,
+            register_best_model=register_best_model,
+            model_registry_name=model_registry_name,
+            target_stage=target_stage,
+        )
+        mlflow_logger_task.after(training_task)
+        mlflow_logger_task.set_caching_options(False)
+        mlflow_logger_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
+        _mount_mlflow_connection_secret(mlflow_logger_task, mlflow_connection_secret_name)
+
     with dsl.If(preset == "balanced"):
         training_task_bl = autogluon_models_training(**_training_kwargs)
         training_task_bl.set_caching_options(False)
         training_task_bl.set_cpu_request("8").set_memory_request("32Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
+        _add_mlflow_logger(training_task_bl)
 
     with dsl.Else():
         training_task_sp = autogluon_models_training(**_training_kwargs)
@@ -213,6 +260,7 @@ def autogluon_tabular_training_pipeline(
         training_task_sp.set_cpu_request("4").set_memory_request("16Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
+        _add_mlflow_logger(training_task_sp)
 
 
 if __name__ == "__main__":

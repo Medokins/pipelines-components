@@ -1,12 +1,14 @@
 ---
-name: component_stage_map_publisher
+name: automl_mlflow_logger
 stability: alpha
 dependencies:
   kubeflow:
     - name: Pipelines
       version: '>=2.15.2'
+  external_services:
+    - name: MLflow
+      version: '>=2.9.0'
 tags:
   - automl
-  - run-status
   - mlflow
 lastVerified: 2026-08-26T00:00:00Z
