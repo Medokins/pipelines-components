@@ -1,7 +1,9 @@
 """MLflow tracking helpers for AutoML pipeline components.
 
-Reads ``MLFLOW_*`` environment variables from the pod (typically mounted from the
-``mlflow-connection`` secret via ``mlflow_connection_secret_name``).
+Reads the platform-native ``KFP_MLFLOW_CONFIG`` JSON blob that Kubeflow/RHOAI injects
+into every pipeline step. No custom connection secret is required: the tracking URI,
+parent run, experiment, and workspace all come from that blob, and authentication uses
+the pod's mounted Kubernetes service-account token.
 """
 
 from __future__ import annotations
@@ -17,19 +19,18 @@ from typing import Any, Iterator, Literal
 
 logger = logging.getLogger(__name__)
 
-MlflowMode = Literal["disabled", "kfp", "connection"]
+MlflowMode = Literal["disabled", "kfp"]
 
-# Default example secret name when documenting manual connection setup.
-MLFLOW_CONNECTION_SECRET_NAME = "mlflow-connection"
+# Env var holding the platform-injected MLflow config (JSON). Set by the KFP MLflow
+# integration on every step; absent when the platform integration is not enabled.
+KFP_MLFLOW_CONFIG_ENV = "KFP_MLFLOW_CONFIG"
 
-MLFLOW_CONNECTION_SECRET_KEY_TO_ENV: dict[str, str] = {
-    "MLFLOW_TRACKING_URI": "MLFLOW_TRACKING_URI",
-    "MLFLOW_TRACKING_AUTH": "MLFLOW_TRACKING_AUTH",
-    "MLFLOW_WORKSPACE": "MLFLOW_WORKSPACE",
-    "MLFLOW_EXPERIMENT_NAME": "MLFLOW_EXPERIMENT_NAME",
-    "MLFLOW_TRACKING_TOKEN": "MLFLOW_TRACKING_TOKEN",
-    "MLFLOW_TRACKING_INSECURE_TLS": "MLFLOW_TRACKING_INSECURE_TLS",
-}
+# Mounted service-account token used to authenticate to the MLflow server when
+# ``authType`` is ``kubernetes``. MLflow sends it as an ``Authorization: Bearer`` header
+# via ``MLFLOW_TRACKING_TOKEN`` (the runtime image's MLflow has no built-in kubernetes
+# auth provider, so we populate the token ourselves).
+SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+KUBERNETES_AUTH_TYPE = "kubernetes"
 
 OPTIONAL_METRIC_ARTIFACTS = (
     "feature_importance.json",
@@ -64,36 +65,54 @@ MLFLOW_WORKSPACE_HEADER = "x-mlflow-workspace"
 
 @dataclass(frozen=True)
 class MlflowConfig:
-    """Resolved MLflow settings for the current pod."""
+    """Resolved MLflow settings for the current pod, parsed from ``KFP_MLFLOW_CONFIG``."""
 
     mode: MlflowMode
     tracking_uri: str
     experiment_id: str = ""
     run_id: str = ""
     workspace: str = ""
-    tracking_auth: str = ""
-    experiment_name: str = ""
+    auth_type: str = ""
+    timeout: str = ""
 
 
 def resolve_mlflow_config() -> MlflowConfig | None:
-    """Resolve MLflow config from environment variables.
+    """Resolve MLflow config from the platform-injected ``KFP_MLFLOW_CONFIG`` blob.
 
-    Platform integration is preferred when ``MLFLOW_RUN_ID`` is present.
+    Returns ``None`` (tracking disabled) when the env var is absent, is not valid JSON,
+    or lacks an ``endpoint``. The blob has the shape::
+
+        {"endpoint": "...", "workspacesEnabled": true, "workspace": "ns-...",
+         "parentRunId": "...", "experimentId": "2", "authType": "kubernetes",
+         "timeout": "30s"}
     """
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    if not tracking_uri:
+    raw = os.getenv(KFP_MLFLOW_CONFIG_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("%s is set but is not valid JSON; MLflow logging disabled.", KFP_MLFLOW_CONFIG_ENV)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("%s is not a JSON object; MLflow logging disabled.", KFP_MLFLOW_CONFIG_ENV)
         return None
 
-    run_id = os.getenv("MLFLOW_RUN_ID", "").strip()
-    mode: MlflowMode = "kfp" if run_id else "connection"
+    tracking_uri = str(data.get("endpoint", "")).strip()
+    if not tracking_uri:
+        logger.warning("%s has no 'endpoint'; MLflow logging disabled.", KFP_MLFLOW_CONFIG_ENV)
+        return None
+
+    # Only scope requests to a workspace when the server has workspaces enabled.
+    workspace = str(data.get("workspace", "")).strip() if data.get("workspacesEnabled") else ""
     return MlflowConfig(
-        mode=mode,
+        mode="kfp",
         tracking_uri=tracking_uri,
-        experiment_id=os.getenv("MLFLOW_EXPERIMENT_ID", "").strip(),
-        run_id=run_id,
-        workspace=os.getenv("MLFLOW_WORKSPACE", "").strip(),
-        tracking_auth=os.getenv("MLFLOW_TRACKING_AUTH", "").strip(),
-        experiment_name=os.getenv("MLFLOW_EXPERIMENT_NAME", "").strip(),
+        experiment_id=str(data.get("experimentId", "")).strip(),
+        run_id=str(data.get("parentRunId", "")).strip(),
+        workspace=workspace,
+        auth_type=str(data.get("authType", "")).strip(),
+        timeout=str(data.get("timeout", "")).strip(),
     )
 
 
@@ -111,8 +130,7 @@ def read_mlflow_env() -> dict[str, str]:
             "mlflow_experiment_id": "",
             "mlflow_run_id": "",
             "mlflow_workspace": "",
-            "mlflow_tracking_auth": "",
-            "mlflow_experiment_name": "",
+            "mlflow_auth_type": "",
             "tracking_mode": "disabled",
         }
     return {
@@ -120,8 +138,7 @@ def read_mlflow_env() -> dict[str, str]:
         "mlflow_experiment_id": config.experiment_id,
         "mlflow_run_id": config.run_id,
         "mlflow_workspace": config.workspace,
-        "mlflow_tracking_auth": config.tracking_auth,
-        "mlflow_experiment_name": config.experiment_name,
+        "mlflow_auth_type": config.auth_type,
         "tracking_mode": config.mode,
     }
 
@@ -159,14 +176,18 @@ def build_mlflow_stage_map_block(
     run_id: str | None = None,
     workspace: str | None = None,
 ) -> dict[str, Any]:
-    """Build the ``mlflow`` object embedded in ``component_stage_map.json`` (ADR schema)."""
-    uri = (tracking_uri if tracking_uri is not None else os.getenv("MLFLOW_TRACKING_URI", "")).strip()
+    """Build the ``mlflow`` object embedded in ``component_stage_map.json`` (ADR schema).
+
+    Values default to the resolved ``KFP_MLFLOW_CONFIG`` blob; explicit arguments override.
+    """
+    config = resolve_mlflow_config()
+    uri = (tracking_uri if tracking_uri is not None else (config.tracking_uri if config else "")).strip()
     if not uri:
         return {"tracking_enabled": False}
 
-    exp_id = (experiment_id if experiment_id is not None else os.getenv("MLFLOW_EXPERIMENT_ID", "")).strip()
-    parent_run_id = (run_id if run_id is not None else os.getenv("MLFLOW_RUN_ID", "")).strip()
-    ws = (workspace if workspace is not None else os.getenv("MLFLOW_WORKSPACE", "")).strip()
+    exp_id = (experiment_id if experiment_id is not None else (config.experiment_id if config else "")).strip()
+    parent_run_id = (run_id if run_id is not None else (config.run_id if config else "")).strip()
+    ws = (workspace if workspace is not None else (config.workspace if config else "")).strip()
 
     block: dict[str, Any] = {
         "tracking_enabled": True,
@@ -185,10 +206,35 @@ def build_mlflow_stage_map_block(
 
 
 def configure_mlflow_client(mlflow: Any, config: MlflowConfig) -> None:
-    """Apply tracking URI and workspace before MLflow API calls."""
+    """Apply authentication, tracking URI, and workspace before MLflow API calls."""
+    if config.auth_type == KUBERNETES_AUTH_TYPE:
+        _apply_kubernetes_auth()
     mlflow.set_tracking_uri(config.tracking_uri)
     if config.workspace:
         _apply_workspace(mlflow, config.tracking_uri, config.workspace)
+
+
+def _apply_kubernetes_auth() -> None:
+    """Authenticate to MLflow with the pod's Kubernetes service-account token.
+
+    MLflow reads ``MLFLOW_TRACKING_TOKEN`` and sends it as an ``Authorization: Bearer``
+    header. Best-effort: a missing/unreadable token leaves auth unset and is surfaced by
+    the eventual request failure rather than crashing here.
+    """
+    token_path = Path(SERVICE_ACCOUNT_TOKEN_PATH)
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        logger.warning(
+            "authType=kubernetes but service-account token is not readable at %s; "
+            "MLflow requests will be unauthenticated.",
+            token_path,
+        )
+        return
+    if not token:
+        logger.warning("Service-account token at %s is empty; MLflow requests will be unauthenticated.", token_path)
+        return
+    os.environ["MLFLOW_TRACKING_TOKEN"] = token
 
 
 def _apply_workspace(mlflow: Any, tracking_uri: str, workspace: str) -> None:
@@ -243,24 +289,10 @@ def _install_workspace_request_header(tracking_uri: str, workspace: str) -> None
 
 
 @contextmanager
-def parent_mlflow_run(
-    mlflow: Any,
-    config: MlflowConfig,
-    *,
-    pipeline_name: str,
-    kfp_run_name: str = "",
-) -> Iterator[Any]:
-    """Open the parent MLflow run for platform or connection-backed tracking."""
+def parent_mlflow_run(mlflow: Any, config: MlflowConfig) -> Iterator[Any]:
+    """Resume the platform-created parent run (``parentRunId``) for nested logging."""
     configure_mlflow_client(mlflow, config)
-    if config.mode == "kfp":
-        with mlflow.start_run(run_id=config.run_id) as run:
-            yield run
-        return
-
-    experiment_name = config.experiment_name or pipeline_name
-    mlflow.set_experiment(experiment_name)
-    parent_run_name = kfp_run_name or pipeline_name
-    with mlflow.start_run(run_name=parent_run_name) as run:
+    with mlflow.start_run(run_id=config.run_id) as run:
         yield run
 
 
@@ -865,12 +897,7 @@ def log_automl_results(
         child_run_ids: list[str] = []
         child_run_errors: list[str] = []
         registry_info: dict[str, str] = {}
-        with parent_mlflow_run(
-            mlflow,
-            config,
-            pipeline_name=pipeline_name,
-            kfp_run_name=kfp_run_name,
-        ):
+        with parent_mlflow_run(mlflow, config):
             parent_run_id, child_run_ids, child_run_errors, registry_info = _log_runs_under_parent(
                 mlflow,
                 models_artifact=models_artifact,
@@ -895,18 +922,17 @@ def log_automl_results(
             )
 
         experiment_id = config.experiment_id
-        if config.mode == "connection":
-            active_experiment = mlflow.get_experiment_by_name(config.experiment_name or pipeline_name)
-            if active_experiment is not None:
-                experiment_id = active_experiment.experiment_id
-
+        run_id_for_url = parent_run_id or config.run_id
         tracking_info = {
-            "mlflow_run_id": parent_run_id or config.run_id,
+            "mlflow_run_id": run_id_for_url,
             "mlflow_experiment_id": experiment_id,
             "tracking_mode": config.mode,
             "mlflow_child_run_ids": ",".join(child_run_ids),
             "mlflow_child_run_count": str(len(child_run_ids)),
         }
+        run_url = build_mlflow_run_url(config.tracking_uri, experiment_id, run_id_for_url)
+        if run_url:
+            tracking_info["mlflow_run_url"] = run_url
         tracking_info.update(registry_info)
         if child_run_errors:
             tracking_info["mlflow_child_run_errors"] = json.dumps(child_run_errors)

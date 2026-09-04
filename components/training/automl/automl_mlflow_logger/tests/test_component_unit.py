@@ -84,11 +84,11 @@ class TestAutomlMlflowLogger:
             {
                 "mlflow_run_id": "run-abc",
                 "mlflow_experiment_id": "7",
-                "tracking_mode": "connection",
+                "tracking_mode": "kfp",
             },
         ),
     )
-    def test_records_metadata_after_connection_logging(
+    def test_records_metadata_after_kfp_logging(
         self,
         mock_log,
         tmp_path,
@@ -112,7 +112,7 @@ class TestAutomlMlflowLogger:
         assert component_status_artifact.metadata["tracking_enabled"] == "True"
         assert component_status_artifact.metadata["mlflow_run_id"] == "run-abc"
         assert component_status_artifact.metadata["mlflow_experiment_id"] == "7"
-        assert component_status_artifact.metadata["tracking_mode"] == "connection"
+        assert component_status_artifact.metadata["tracking_mode"] == "kfp"
 
     @mock.patch(
         "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
@@ -120,7 +120,44 @@ class TestAutomlMlflowLogger:
             True,
             {
                 "mlflow_run_id": "run-abc",
-                "tracking_mode": "connection",
+                "mlflow_experiment_id": "7",
+                "mlflow_run_url": "https://mlflow.example.com/#/experiments/7/runs/run-abc",
+                "tracking_mode": "kfp",
+            },
+        ),
+    )
+    def test_records_run_url_metadata(
+        self,
+        mock_log,
+        tmp_path,
+        component_status_artifact,
+    ):
+        """Surface the deep-link mlflow_run_url on component_status metadata."""
+        html_path = tmp_path / "leaderboard.html"
+        html_path.write_text("<html></html>", encoding="utf-8")
+
+        automl_mlflow_logger.python_func(
+            models_artifact=_make_models_artifact(tmp_path, ["Model_FULL"]),
+            html_artifact=_make_html_artifact(html_path),
+            eval_metric="accuracy",
+            pipeline_name="autogluon-tabular-training-pipeline",
+            run_id="run-1",
+            task_type="binary",
+            component_status=component_status_artifact,
+        )
+
+        assert (
+            component_status_artifact.metadata["mlflow_run_url"]
+            == "https://mlflow.example.com/#/experiments/7/runs/run-abc"
+        )
+
+    @mock.patch(
+        "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
+        return_value=(
+            True,
+            {
+                "mlflow_run_id": "run-abc",
+                "tracking_mode": "kfp",
                 "mlflow_registered_model": "my-model",
                 "mlflow_model_version": "3",
                 "mlflow_target_stage": "staging",
@@ -160,7 +197,7 @@ class TestAutomlMlflowLogger:
 
     @mock.patch(
         "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
-        return_value=(True, {"tracking_mode": "connection"}),
+        return_value=(True, {"tracking_mode": "kfp"}),
     )
     def test_experiment_name_stable_run_name_per_execution(
         self,
@@ -190,7 +227,7 @@ class TestAutomlMlflowLogger:
 
     @mock.patch(
         "kfp_components.components.training.automl.shared.mlflow_tracking.log_automl_results",
-        return_value=(True, {"tracking_mode": "connection"}),
+        return_value=(True, {"tracking_mode": "kfp"}),
     )
     def test_run_name_falls_back_to_pipeline_name(
         self,
@@ -221,7 +258,7 @@ class TestAutomlMlflowLogger:
             False,
             {
                 "error": '{"reason": "NotAcceptable", "code": 406}',
-                "tracking_mode": "connection",
+                "tracking_mode": "kfp",
             },
         ),
     )

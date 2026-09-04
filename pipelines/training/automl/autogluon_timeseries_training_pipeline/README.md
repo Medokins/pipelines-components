@@ -41,7 +41,6 @@ to a single combined ``models_artifact``.
 | `top_n` | `int` | `3` | Number of top models to select for the leaderboard and output (default: 3). |
 | `eval_metric` | `str` | `mean_absolute_scaled_error` | Metric for model ranking in snake_case (e.g. ``"mean_absolute_scaled_error"``, ``"weighted_quantile_loss"``) or legacy uppercase acronym form. Defaults to ``"mean_absolute_scaled_error"``. |
 | `preset` | `str` | `speed` | Training quality tier. ``"speed"`` (default, 4 vCPU / 16 GiB) or ``"balanced"`` (may run more than 2x longer, 8 vCPU / 32 GiB). |
-| `mlflow_connection_secret_name` | `str` | `""` | Optional Kubernetes secret providing MLflow tracking env vars (MLFLOW_TRACKING_URI, etc.), mounted on the MLflow logger step only. Empty (default) disables MLflow logging; the step still succeeds. |
 | `register_best_model` | `bool` | `False` | When True, register the best model in the MLflow Model Registry (requires model_registry_name). |
 | `model_registry_name` | `str` | `""` | Registered-model name to use when register_best_model is True. |
 | `target_stage` | `str` | `""` | Optional deployment-stage value set as a ``target_stage`` tag on the registered best-model version. |

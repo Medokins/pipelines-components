@@ -30,8 +30,8 @@ def automl_mlflow_logger(
 ) -> None:
     """Log AutoML experiment results to MLflow at the end of the pipeline run.
 
-    Expects ``MLFLOW_*`` environment variables from the ``mlflow_connection_secret_name``
-    pipeline parameter (mounted on this step only). When ``MLFLOW_TRACKING_URI`` is unset,
+    Reads the platform-injected ``KFP_MLFLOW_CONFIG`` blob (Kubeflow/RHOAI native MLflow
+    integration); no custom connection secret is required. When that env var is absent,
     logging is skipped and the step completes successfully.
 
     Each refitted model becomes a nested child run under the parent experiment run, logging
@@ -48,15 +48,15 @@ def automl_mlflow_logger(
         models_artifact: Combined models artifact from training with ``metadata["model_names"]``.
         html_artifact: Leaderboard HTML artifact from the training component.
         eval_metric: Metric used for ranking (e.g. ``accuracy``, ``MASE``).
-        pipeline_name: Stable pipeline name used as the MLflow experiment name (and tags) when
-            the connection does not set ``MLFLOW_EXPERIMENT_NAME``. Pass the pipeline's logical
-            name (e.g. ``PIPELINE_NAME``) so runs aggregate under one experiment.
+        pipeline_name: Stable pipeline name used only for run tags. Pass the pipeline's logical
+            name (e.g. ``PIPELINE_NAME``). The MLflow experiment and parent run come from
+            ``KFP_MLFLOW_CONFIG``.
         run_id: KFP run ID (from ``dsl.PIPELINE_JOB_ID_PLACEHOLDER``).
         task_type: ML task type (``binary``, ``multiclass``, ``regression``, or ``time_series``).
         component_status: Output artifact with stage progress (``component_status.json``).
-        run_name: Per-execution MLflow parent run name. Pass the run's display name (from
-            ``dsl.PIPELINE_JOB_NAME_PLACEHOLDER``) so the MLflow run matches the OpenShift run
-            name. Falls back to ``pipeline_name`` when empty.
+        run_name: Per-execution run name recorded as a tag on child runs. Pass the run's display
+            name (from ``dsl.PIPELINE_JOB_NAME_PLACEHOLDER``). Falls back to ``pipeline_name``
+            when empty.
         preset: Training quality preset logged on the parent run.
         top_n: Number of top models logged on the parent run.
         log_model_artifacts: When True, upload each model's predictor (model.pkl) and notebook.
@@ -71,6 +71,7 @@ def automl_mlflow_logger(
         ValueError: If ``top_n`` is not positive.
     """
     import importlib.util
+    import json
     import logging
     import os
     import sys
@@ -106,18 +107,27 @@ def automl_mlflow_logger(
     log_automl_results = _load_log_automl_results()
 
     logger = logging.getLogger(__name__)
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
+    mlflow_config: dict = {}
+    raw_mlflow_config = os.getenv("KFP_MLFLOW_CONFIG", "").strip()
+    if raw_mlflow_config:
+        try:
+            parsed = json.loads(raw_mlflow_config)
+            if isinstance(parsed, dict):
+                mlflow_config = parsed
+        except json.JSONDecodeError:
+            logger.warning("KFP_MLFLOW_CONFIG is set but is not valid JSON.")
+    tracking_uri = str(mlflow_config.get("endpoint", "")).strip()
     logger.info(
-        "MLflow env: MLFLOW_TRACKING_URI=%s MLFLOW_RUN_ID=%s MLFLOW_WORKSPACE=%s MLFLOW_EXPERIMENT_NAME=%s",
+        "MLflow env: KFP_MLFLOW_CONFIG endpoint=%s parentRunId=%s workspace=%s authType=%s",
         "set" if tracking_uri else "unset",
-        "set" if os.getenv("MLFLOW_RUN_ID") else "unset",
-        os.getenv("MLFLOW_WORKSPACE", "") or "(empty)",
-        os.getenv("MLFLOW_EXPERIMENT_NAME", "") or "(empty)",
+        "set" if mlflow_config.get("parentRunId") else "unset",
+        str(mlflow_config.get("workspace", "")) or "(empty)",
+        str(mlflow_config.get("authType", "")) or "(empty)",
     )
     if not tracking_uri:
         logger.warning(
-            "MLFLOW_TRACKING_URI is unset. Set pipeline parameter mlflow_connection_secret_name "
-            "(for example mlflow-connection) when starting the run."
+            "KFP_MLFLOW_CONFIG is unset or has no endpoint; MLflow logging will be skipped. "
+            "This requires the cluster's native KFP MLflow integration to be enabled."
         )
 
     if not isinstance(eval_metric, str) or not eval_metric.strip():
@@ -158,6 +168,7 @@ def automl_mlflow_logger(
         for key in (
             "mlflow_run_id",
             "mlflow_experiment_id",
+            "mlflow_run_url",
             "tracking_mode",
             "mlflow_child_run_count",
             "mlflow_child_run_ids",

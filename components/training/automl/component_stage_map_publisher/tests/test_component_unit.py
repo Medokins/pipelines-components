@@ -46,9 +46,9 @@ class TestPublishComponentStageMap:
         assert component_stage_map_artifact.metadata["display_name"] == "Component Stage Map"
         assert component_stage_map_artifact.metadata["pipeline_id"] == PIPELINE_TABULAR
 
-    def test_mlflow_block_disabled_when_tracking_uri_unset(self, component_stage_map_artifact, monkeypatch):
-        """Emit a disabled mlflow block when MLFLOW_TRACKING_URI is unset."""
-        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    def test_mlflow_block_disabled_when_config_unset(self, component_stage_map_artifact, monkeypatch):
+        """Emit a disabled mlflow block when KFP_MLFLOW_CONFIG is unset."""
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
         publish_component_stage_map.python_func(
             pipeline_id=PIPELINE_TABULAR,
             run_id="run-abc",
@@ -61,10 +61,17 @@ class TestPublishComponentStageMap:
         assert component_stage_map_artifact.metadata["mlflow_tracking_enabled"] == "False"
 
     def test_mlflow_block_enabled_from_env(self, component_stage_map_artifact, monkeypatch):
-        """Populate the mlflow block from MLFLOW_* env vars when tracking is enabled."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "7")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
+        """Populate the mlflow block from KFP_MLFLOW_CONFIG when tracking is enabled."""
+        monkeypatch.setenv(
+            "KFP_MLFLOW_CONFIG",
+            json.dumps(
+                {
+                    "endpoint": "https://mlflow.example.com",
+                    "experimentId": "7",
+                    "parentRunId": "parent-run",
+                }
+            ),
+        )
         publish_component_stage_map.python_func(
             pipeline_id=PIPELINE_TABULAR,
             run_id="run-abc",

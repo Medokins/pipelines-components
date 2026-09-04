@@ -49,23 +49,33 @@ def publish_component_stage_map(
     )
 
     def _build_mlflow_stage_map_block() -> dict:
-        """Build the ``mlflow`` block from pod env vars.
+        """Build the ``mlflow`` block from the platform-injected ``KFP_MLFLOW_CONFIG`` blob.
 
         Inlined so the publisher does not depend on ``shared/mlflow_tracking.py`` being
         installed in the runtime image (mirrors ``build_mlflow_stage_map_block`` there).
         """
-        tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
+        raw = os.getenv("KFP_MLFLOW_CONFIG", "").strip()
+        if not raw:
+            return {"tracking_enabled": False}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"tracking_enabled": False}
+        if not isinstance(data, dict):
+            return {"tracking_enabled": False}
+
+        tracking_uri = str(data.get("endpoint", "")).strip()
         if not tracking_uri:
             return {"tracking_enabled": False}
 
         block: dict = {"tracking_enabled": True, "tracking_uri": tracking_uri}
-        experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
+        experiment_id = str(data.get("experimentId", "")).strip()
         if experiment_id:
             block["experiment_id"] = experiment_id
-        parent_run_id = os.getenv("MLFLOW_RUN_ID", "").strip()
+        parent_run_id = str(data.get("parentRunId", "")).strip()
         if parent_run_id:
             block["run_id"] = parent_run_id
-        workspace = os.getenv("MLFLOW_WORKSPACE", "").strip()
+        workspace = str(data.get("workspace", "")).strip() if data.get("workspacesEnabled") else ""
         if workspace:
             block["workspace"] = workspace
         if experiment_id and parent_run_id:

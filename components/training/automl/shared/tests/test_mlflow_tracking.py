@@ -1,13 +1,14 @@
 """Unit tests for MLflow tracking helpers."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from kfp_components.components.training.automl.shared import mlflow_tracking
 from kfp_components.components.training.automl.shared.mlflow_tracking import (
-    MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
     MLFLOW_WORKSPACE_HEADER,
     MlflowConfig,
     _metrics_for_task,
@@ -24,41 +25,90 @@ from kfp_components.components.training.automl.shared.mlflow_tracking import (
 )
 
 
+def _set_kfp_mlflow_config(
+    monkeypatch,
+    *,
+    endpoint="https://mlflow.example.com",
+    experiment_id="1",
+    parent_run_id="parent-run",
+    workspace="",
+    workspaces_enabled=None,
+    auth_type="",
+    timeout="30s",
+    extra=None,
+):
+    """Set KFP_MLFLOW_CONFIG to a JSON blob matching what the platform injects."""
+    cfg = {
+        "endpoint": endpoint,
+        "experimentId": experiment_id,
+        "parentRunId": parent_run_id,
+        "authType": auth_type,
+        "timeout": timeout,
+    }
+    if workspace:
+        cfg["workspace"] = workspace
+        cfg["workspacesEnabled"] = True if workspaces_enabled is None else workspaces_enabled
+    elif workspaces_enabled is not None:
+        cfg["workspacesEnabled"] = workspaces_enabled
+    if extra:
+        cfg.update(extra)
+    monkeypatch.setenv("KFP_MLFLOW_CONFIG", json.dumps(cfg))
+    return cfg
+
+
 class TestMlflowTrackingHelpers:
     """Tests for MLflow env helpers and tracking artifact builders."""
 
-    def test_connection_secret_key_mapping_includes_tracking_uri(self):
-        """Secret mount mapping exposes MLFLOW_TRACKING_URI."""
-        assert "MLFLOW_TRACKING_URI" in MLFLOW_CONNECTION_SECRET_KEY_TO_ENV
-
     def test_is_mlflow_enabled_false_when_unset(self, monkeypatch):
-        """Return False when MLFLOW_TRACKING_URI is unset."""
-        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+        """Return False when KFP_MLFLOW_CONFIG is unset."""
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
         assert is_mlflow_enabled() is False
 
     def test_is_mlflow_enabled_true_when_set(self, monkeypatch):
-        """Return True when MLFLOW_TRACKING_URI is set."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
+        """Return True when KFP_MLFLOW_CONFIG carries an endpoint."""
+        _set_kfp_mlflow_config(monkeypatch)
         assert is_mlflow_enabled() is True
 
-    def test_resolve_mlflow_config_kfp_mode(self, monkeypatch):
-        """Prefer KFP mode when MLFLOW_RUN_ID is present."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
+    def test_resolve_mlflow_config_parses_blob(self, monkeypatch):
+        """Parse endpoint/parentRunId/experimentId/workspace/authType from the blob."""
+        _set_kfp_mlflow_config(
+            monkeypatch,
+            endpoint="https://mlflow.example.com/mlflow",
+            experiment_id="8",
+            parent_run_id="6aae16e6",
+            workspace="ns-automl-benchmarking",
+            auth_type="kubernetes",
+        )
         config = resolve_mlflow_config()
         assert config is not None
         assert config.mode == "kfp"
-        assert config.run_id == "parent-run"
+        assert config.tracking_uri == "https://mlflow.example.com/mlflow"
+        assert config.experiment_id == "8"
+        assert config.run_id == "6aae16e6"
+        assert config.workspace == "ns-automl-benchmarking"
+        assert config.auth_type == "kubernetes"
 
-    def test_resolve_mlflow_config_connection_mode(self, monkeypatch):
-        """Use connection mode when URI is set without MLFLOW_RUN_ID."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "automl-experiments")
+    def test_resolve_mlflow_config_none_when_absent(self, monkeypatch):
+        """Return None when KFP_MLFLOW_CONFIG is not set."""
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
+        assert resolve_mlflow_config() is None
+
+    def test_resolve_mlflow_config_none_when_invalid_json(self, monkeypatch):
+        """Return None (not raise) when KFP_MLFLOW_CONFIG is malformed."""
+        monkeypatch.setenv("KFP_MLFLOW_CONFIG", "{not json")
+        assert resolve_mlflow_config() is None
+
+    def test_resolve_mlflow_config_none_when_no_endpoint(self, monkeypatch):
+        """Return None when the blob has no endpoint."""
+        monkeypatch.setenv("KFP_MLFLOW_CONFIG", json.dumps({"parentRunId": "x"}))
+        assert resolve_mlflow_config() is None
+
+    def test_resolve_mlflow_config_ignores_workspace_when_disabled(self, monkeypatch):
+        """Drop the workspace when workspacesEnabled is false."""
+        _set_kfp_mlflow_config(monkeypatch, workspace="ns-automl-benchmarking", workspaces_enabled=False)
         config = resolve_mlflow_config()
         assert config is not None
-        assert config.mode == "connection"
-        assert config.experiment_name == "automl-experiments"
+        assert config.workspace == ""
 
     def test_build_mlflow_run_url(self):
         """Build a deep-link URL for the MLflow UI."""
@@ -67,28 +117,31 @@ class TestMlflowTrackingHelpers:
 
     def test_build_mlflow_stage_map_block_disabled(self, monkeypatch):
         """Emit minimal mlflow block when tracking is disabled."""
-        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
         block = build_mlflow_stage_map_block()
         assert block == {"tracking_enabled": False}
 
-    def test_build_mlflow_stage_map_block_connection_uri_only(self, monkeypatch):
-        """Include tracking URI when only MLFLOW_TRACKING_URI is available."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
-        monkeypatch.delenv("MLFLOW_EXPERIMENT_ID", raising=False)
-        monkeypatch.delenv("MLFLOW_WORKSPACE", raising=False)
+    def test_build_mlflow_stage_map_block_uri_only(self, monkeypatch):
+        """Include tracking URI when only an endpoint (no ids/workspace) is available."""
+        _set_kfp_mlflow_config(
+            monkeypatch,
+            experiment_id="",
+            parent_run_id="",
+        )
         block = build_mlflow_stage_map_block()
         assert block == {
             "tracking_enabled": True,
             "tracking_uri": "https://mlflow.example.com",
         }
 
-    def test_build_mlflow_stage_map_block_kfp_mode(self, monkeypatch):
-        """Include MLflow IDs when tracking is enabled in KFP mode."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "7")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
-        monkeypatch.setenv("MLFLOW_WORKSPACE", "ds-project")
+    def test_build_mlflow_stage_map_block_full(self, monkeypatch):
+        """Include MLflow IDs and workspace when the full blob is present."""
+        _set_kfp_mlflow_config(
+            monkeypatch,
+            experiment_id="7",
+            parent_run_id="parent-run",
+            workspace="ds-project",
+        )
         block = build_mlflow_stage_map_block()
         assert block == {
             "tracking_enabled": True,
@@ -103,7 +156,7 @@ class TestMlflowTrackingHelpers:
         """Prefer mlflow.set_workspace when the client exposes it."""
         mlflow = mock.Mock(spec=["set_tracking_uri", "set_workspace"])
         config = MlflowConfig(
-            mode="connection",
+            mode="kfp",
             tracking_uri="https://mlflow.example.com/mlflow",
             workspace="ns-automl-benchmarking",
         )
@@ -125,7 +178,7 @@ class TestMlflowTrackingHelpers:
 
         mlflow = mock.Mock(spec=["set_tracking_uri"])  # no set_workspace attribute
         config = MlflowConfig(
-            mode="connection",
+            mode="kfp",
             tracking_uri="https://mlflow.example.com/mlflow",
             workspace="ns-automl-benchmarking",
         )
@@ -143,11 +196,35 @@ class TestMlflowTrackingHelpers:
         assert MLFLOW_WORKSPACE_HEADER not in other_host_headers
 
     def test_configure_skips_workspace_when_empty(self):
-        """No workspace handling when MLFLOW_WORKSPACE is empty."""
+        """No workspace handling when the workspace is empty."""
         mlflow = mock.Mock(spec=["set_tracking_uri", "set_workspace"])
-        config = MlflowConfig(mode="connection", tracking_uri="https://mlflow.example.com", workspace="")
+        config = MlflowConfig(mode="kfp", tracking_uri="https://mlflow.example.com", workspace="")
         configure_mlflow_client(mlflow, config)
         mlflow.set_workspace.assert_not_called()
+
+    def test_configure_kubernetes_auth_sets_token(self, monkeypatch, tmp_path):
+        """Populate MLFLOW_TRACKING_TOKEN from the SA token file when authType=kubernetes."""
+        token_file = tmp_path / "token"
+        token_file.write_text("sa-token-value\n", encoding="utf-8")
+        monkeypatch.setattr(mlflow_tracking, "SERVICE_ACCOUNT_TOKEN_PATH", str(token_file))
+        monkeypatch.delenv("MLFLOW_TRACKING_TOKEN", raising=False)
+
+        mlflow = mock.Mock(spec=["set_tracking_uri"])
+        config = MlflowConfig(mode="kfp", tracking_uri="https://mlflow.example.com", auth_type="kubernetes")
+        configure_mlflow_client(mlflow, config)
+
+        assert os.environ["MLFLOW_TRACKING_TOKEN"] == "sa-token-value"
+
+    def test_configure_kubernetes_auth_missing_token_does_not_raise(self, monkeypatch, tmp_path):
+        """A missing SA token leaves auth unset without raising."""
+        monkeypatch.setattr(mlflow_tracking, "SERVICE_ACCOUNT_TOKEN_PATH", str(tmp_path / "absent"))
+        monkeypatch.delenv("MLFLOW_TRACKING_TOKEN", raising=False)
+
+        mlflow = mock.Mock(spec=["set_tracking_uri"])
+        config = MlflowConfig(mode="kfp", tracking_uri="https://mlflow.example.com", auth_type="kubernetes")
+        configure_mlflow_client(mlflow, config)
+
+        assert "MLFLOW_TRACKING_TOKEN" not in os.environ
 
     @pytest.mark.parametrize(
         ("model_name", "expected_type", "expected_level"),
@@ -235,7 +312,7 @@ class TestLogAutomlResults:
 
     def test_skips_when_mlflow_disabled(self, tmp_path, monkeypatch):
         """Return False without calling MLflow when tracking is disabled."""
-        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
         models_artifact = _make_models_artifact(tmp_path, ["Model_FULL"])
         logged, tracking_info = log_automl_results(
             models_artifact=models_artifact,
@@ -249,9 +326,7 @@ class TestLogAutomlResults:
 
     def test_logs_parent_and_child_runs_kfp_mode(self, tmp_path, monkeypatch):
         """Create parent and nested child MLflow runs in KFP mode."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "1")
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
 
         model_name = "LightGBM_BAG_L1_FULL"
         metrics_dir = _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91, "f1": 0.88})
@@ -291,9 +366,7 @@ class TestLogAutomlResults:
 
     def test_logs_multiple_child_runs(self, tmp_path, monkeypatch):
         """Create one child MLflow run per model under the parent run."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "automl-experiments")
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="99")
 
         model_names = ["WeightedEnsemble_L3_FULL", "CatBoost_BAG_L1_FULL"]
         for model_name in model_names:
@@ -307,9 +380,6 @@ class TestLogAutomlResults:
         mock_mlflow.start_run.side_effect = [parent_ctx, child_ctx_1, child_ctx_2]
         mock_mlflow.active_run.side_effect = [parent_ctx, child_ctx_1, child_ctx_2, parent_ctx, parent_ctx]
         mock_mlflow.entities.RunTag = mock.Mock(side_effect=lambda key, value: (key, value))
-        mock_experiment = mock.MagicMock()
-        mock_experiment.experiment_id = "99"
-        mock_mlflow.get_experiment_by_name.return_value = mock_experiment
 
         models_artifact = _make_models_artifact(tmp_path, model_names)
         with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
@@ -324,53 +394,14 @@ class TestLogAutomlResults:
 
         assert logged is True
         assert tracking_info["mlflow_child_run_count"] == "2"
+        assert tracking_info["mlflow_experiment_id"] == "99"
+        mock_mlflow.start_run.assert_any_call(run_id="parent-run")
         mock_mlflow.start_run.assert_any_call(run_name="WeightedEnsemble_L3", nested=True)
         mock_mlflow.start_run.assert_any_call(run_name="CatBoost_BAG_L1", nested=True)
 
-    def test_logs_connection_mode_creates_parent_run(self, tmp_path, monkeypatch):
-        """Create a new parent run when only connection secret env vars are present."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "automl-experiments")
-
-        model_name = "LightGBM_BAG_L1_FULL"
-        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
-        (tmp_path / "leaderboard.html").write_text("<html></html>", encoding="utf-8")
-
-        mock_mlflow = mock.MagicMock()
-        parent_ctx = _mock_run_context("connection-parent-run", "99")
-        child_ctx = _mock_run_context("child-run-1", "99")
-        mock_mlflow.start_run.side_effect = [parent_ctx, child_ctx]
-        mock_mlflow.active_run.side_effect = [parent_ctx, child_ctx, parent_ctx]
-        mock_mlflow.entities.RunTag = mock.Mock(side_effect=lambda key, value: (key, value))
-        mock_experiment = mock.MagicMock()
-        mock_experiment.experiment_id = "99"
-        mock_mlflow.get_experiment_by_name.return_value = mock_experiment
-
-        models_artifact = _make_models_artifact(tmp_path, [model_name])
-        with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
-            logged, tracking_info = log_automl_results(
-                models_artifact=models_artifact,
-                html_artifact_path=tmp_path / "leaderboard.html",
-                eval_metric="accuracy",
-                pipeline_name="autogluon-tabular-training-pipeline",
-                kfp_run_id="run-1",
-            )
-
-        assert logged is True
-        assert tracking_info["tracking_mode"] == "connection"
-        assert tracking_info["mlflow_run_id"] == "connection-parent-run"
-        assert tracking_info["mlflow_experiment_id"] == "99"
-        assert tracking_info["mlflow_child_run_count"] == "1"
-        mock_mlflow.set_experiment.assert_called_once_with("automl-experiments")
-        mock_mlflow.start_run.assert_any_call(run_name="autogluon-tabular-training-pipeline")
-        mock_mlflow.start_run.assert_any_call(run_name="LightGBM_BAG_L1", nested=True)
-
     def test_uploads_model_and_notebook_artifacts(self, tmp_path, monkeypatch):
         """Upload the predictor dir (model.pkl) and notebook per child run."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "1")
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
 
         model_name = "LightGBM_BAG_L1_FULL"
         _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
@@ -407,9 +438,7 @@ class TestLogAutomlResults:
 
     def test_registers_best_model_and_sets_target_stage(self, tmp_path, monkeypatch):
         """Register the best model and tag its version with target_stage."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
-        monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "1")
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
 
         model_name = "LightGBM_BAG_L1_FULL"
         _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
@@ -453,8 +482,7 @@ class TestLogAutomlResults:
 
     def test_returns_false_when_mlflow_api_fails(self, tmp_path, monkeypatch):
         """Do not raise when the MLflow API call fails."""
-        monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.com")
-        monkeypatch.setenv("MLFLOW_RUN_ID", "parent-run")
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
 
         model_name = "LightGBM_BAG_L1_FULL"
         _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})

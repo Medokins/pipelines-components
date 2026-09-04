@@ -55,7 +55,6 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
             "positive_class",
             "preset",
             "eval_metric",
-            "mlflow_connection_secret_name",
             "register_best_model",
             "model_registry_name",
             "target_stage",
@@ -66,7 +65,6 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
         assert inputs["top_n"].default == 3
         assert inputs["preset"].default == "speed"
         assert inputs["eval_metric"].default == ""
-        assert inputs["mlflow_connection_secret_name"].default == ""
         assert inputs["register_best_model"].default is False
         assert inputs["model_registry_name"].default == ""
         assert inputs["target_stage"].default == ""
@@ -215,7 +213,6 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
 
         assert "exec-automl-mlflow-logger:" in content
         assert "exec-automl-mlflow-logger-2:" in content
-        assert "componentInputParameter: mlflow_connection_secret_name" in content
         assert "componentInputParameter: register_best_model" in content
         assert "componentInputParameter: model_registry_name" in content
         assert "componentInputParameter: target_stage" in content

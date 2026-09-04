@@ -7,26 +7,12 @@ from kfp_components.components.training.automl.autogluon_timeseries_models_train
 )
 from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
-from kfp_components.components.training.automl.shared.mlflow_tracking import (  # pyright: ignore[reportMissingImports]
-    MLFLOW_CONNECTION_SECRET_KEY_TO_ENV,
-)
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
 
 # Must match run_status_templates/pipelines/<name>.json
 PIPELINE_NAME = "autogluon-timeseries-training-pipeline"
-
-
-def _mount_mlflow_connection_secret(task, secret_name: str) -> None:
-    """Mount MLflow ``MLFLOW_*`` env vars on the logger step from the connection secret.
-
-    Optional so an unset/absent secret leaves ``MLFLOW_TRACKING_URI`` empty and the logger
-    skips tracking (the step still succeeds).
-    """
-    from kfp.kubernetes import use_secret_as_env
-
-    use_secret_as_env(task, secret_name, MLFLOW_CONNECTION_SECRET_KEY_TO_ENV, optional=True)
 
 
 @dsl.pipeline(
@@ -60,7 +46,6 @@ def autogluon_timeseries_training_pipeline(
     top_n: int = 3,
     eval_metric: str = "mean_absolute_scaled_error",
     preset: str = "speed",
-    mlflow_connection_secret_name: str = "",
     register_best_model: bool = False,
     model_registry_name: str = "",
     target_stage: str = "",
@@ -124,9 +109,6 @@ def autogluon_timeseries_training_pipeline(
             ``"mean_absolute_scaled_error"``.
         preset: Training quality tier. ``"speed"`` (default, 4 vCPU / 16 GiB) or
             ``"balanced"`` (may run more than 2x longer, 8 vCPU / 32 GiB).
-        mlflow_connection_secret_name: Optional Kubernetes secret providing MLflow tracking
-            env vars (MLFLOW_TRACKING_URI, etc.), mounted on the MLflow logger step only.
-            Empty (default) disables MLflow logging; the step still succeeds.
         register_best_model: When True, register the best model in the MLflow Model Registry
             (requires model_registry_name).
         model_registry_name: Registered-model name to use when register_best_model is True.
@@ -219,6 +201,7 @@ def autogluon_timeseries_training_pipeline(
     def _add_mlflow_logger(training_task):
         # MLflow logging runs after training in each branch. It never fails the pipeline:
         # missing tracking config or MLflow errors are recorded on component_status only.
+        # Tracking config comes from the platform-injected KFP_MLFLOW_CONFIG; no secret needed.
         mlflow_logger_task = automl_mlflow_logger(
             models_artifact=training_task.outputs["models_artifact"],
             html_artifact=training_task.outputs["html_artifact"],
@@ -236,7 +219,6 @@ def autogluon_timeseries_training_pipeline(
         mlflow_logger_task.after(training_task)
         mlflow_logger_task.set_caching_options(False)
         mlflow_logger_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
-        _mount_mlflow_connection_secret(mlflow_logger_task, mlflow_connection_secret_name)
 
     with dsl.If(preset == "balanced"):
         training_task_bl = autogluon_timeseries_models_training(**_training_kwargs)

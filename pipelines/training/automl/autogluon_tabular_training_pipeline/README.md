@@ -59,7 +59,6 @@ The pipeline leverages AutoGluon's unique ensembling strategy that combines mult
 | `positive_class` | `str` | `""` | Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values. |
 | `eval_metric` | `str` | `""` | Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification. |
 | `preset` | `str` | `speed` | Training quality tier. "speed" (default, 4 vCPU / 16 GiB) or "balanced" (may run more than 2x longer, 8 vCPU / 32 GiB). |
-| `mlflow_connection_secret_name` | `str` | `""` | Optional Kubernetes secret providing MLflow tracking env vars (MLFLOW_TRACKING_URI, etc.), mounted on the MLflow logger step only. Empty (default) disables MLflow logging; the step still succeeds. |
 | `register_best_model` | `bool` | `False` | When True, register the best model in the MLflow Model Registry (requires model_registry_name). |
 | `model_registry_name` | `str` | `""` | Registered-model name to use when register_best_model is True. |
 | `target_stage` | `str` | `""` | Optional deployment-stage value set as a "target_stage" tag on the registered best-model version. |
