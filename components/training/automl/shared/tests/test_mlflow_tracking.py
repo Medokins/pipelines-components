@@ -412,9 +412,7 @@ class TestMlflowExperimentLogger:
         html_path = tmp_path / "leaderboard.html"
         html_path.write_text("<html></html>", encoding="utf-8")
 
-        mock_mlflow = _make_mock_mlflow(
-            _mock_run_context("parent-run", "1"), [_mock_run_context("live-child-1", "1")]
-        )
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("live-child-1", "1")])
         with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
             with experiment_run_logger(
                 task_type="binary", eval_metric="accuracy", log_model_artifacts=False
@@ -493,9 +491,7 @@ class TestMlflowExperimentLogger:
         html_path = tmp_path / "leaderboard.html"
         html_path.write_text("<html></html>", encoding="utf-8")
 
-        mock_mlflow = _make_mock_mlflow(
-            _mock_run_context("new-parent", "42"), [_mock_run_context("child-1", "42")]
-        )
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("new-parent", "42"), [_mock_run_context("child-1", "42")])
         with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
             with experiment_run_logger(
                 task_type="binary",

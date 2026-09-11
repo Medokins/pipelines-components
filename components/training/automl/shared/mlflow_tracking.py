@@ -82,9 +82,15 @@ def resolve_mlflow_config() -> MlflowConfig | None:
     Returns ``None`` (tracking disabled) when the env var is absent, is not valid JSON,
     or lacks an ``endpoint``. The blob has the shape::
 
-        {"endpoint": "...", "workspacesEnabled": true, "workspace": "ns-...",
-         "parentRunId": "...", "experimentId": "2", "authType": "kubernetes",
-         "timeout": "30s"}
+        {
+            "endpoint": "...",
+            "workspacesEnabled": true,
+            "workspace": "ns-...",
+            "parentRunId": "...",
+            "experimentId": "2",
+            "authType": "kubernetes",
+            "timeout": "30s",
+        }
     """
     raw = os.getenv(KFP_MLFLOW_CONFIG_ENV, "").strip()
     if not raw:
