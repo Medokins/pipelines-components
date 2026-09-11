@@ -5,7 +5,6 @@ from kfp_components.components.data_processing.automl.timeseries_data_loader imp
 from kfp_components.components.training.automl.autogluon_timeseries_models_training import (
     autogluon_timeseries_models_training,
 )
-from kfp_components.components.training.automl.automl_mlflow_logger import automl_mlflow_logger
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
 
 MAX_CPUS = "32"
@@ -177,6 +176,9 @@ def autogluon_timeseries_training_pipeline(
     )
 
     # Stage 2: Combined model generation + full refit.
+    # The training component logs results to MLflow incrementally (one nested child run per
+    # model) when the platform injects KFP_MLFLOW_CONFIG. Tracking is best-effort: missing
+    # config or MLflow errors are recorded on component_status only and never fail the run.
     # Resource limits differ by preset: medium_quality needs more CPU/memory.
     _training_kwargs = dict(
         target=target,
@@ -190,35 +192,17 @@ def autogluon_timeseries_training_pipeline(
         known_covariates_names=known_covariates_names,
         pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+        run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
         sample_rows=data_loader_task.outputs["sample_rows"],
         sampling_config=data_loader_task.outputs["sample_config"],
         split_config=data_loader_task.outputs["split_config"],
         extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
         preset=preset,
         eval_metric=eval_metric,
+        register_best_model=register_best_model,
+        model_registry_name=model_registry_name,
+        target_stage=target_stage,
     )
-
-    def _add_mlflow_logger(training_task):
-        # MLflow logging runs after training in each branch. It never fails the pipeline:
-        # missing tracking config or MLflow errors are recorded on component_status only.
-        # Tracking config comes from the platform-injected KFP_MLFLOW_CONFIG; no secret needed.
-        mlflow_logger_task = automl_mlflow_logger(
-            models_artifact=training_task.outputs["models_artifact"],
-            html_artifact=training_task.outputs["html_artifact"],
-            eval_metric=training_task.outputs["eval_metric"],
-            pipeline_name=PIPELINE_NAME,
-            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
-            run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
-            task_type="time_series",
-            preset=preset,
-            top_n=top_n,
-            register_best_model=register_best_model,
-            model_registry_name=model_registry_name,
-            target_stage=target_stage,
-        )
-        mlflow_logger_task.after(training_task)
-        mlflow_logger_task.set_caching_options(False)
-        mlflow_logger_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
 
     with dsl.If(preset == "balanced"):
         training_task_bl = autogluon_timeseries_models_training(**_training_kwargs)
@@ -226,7 +210,6 @@ def autogluon_timeseries_training_pipeline(
         training_task_bl.set_cpu_request("8").set_memory_request("32Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
-        _add_mlflow_logger(training_task_bl)
 
     with dsl.Else():
         training_task_sp = autogluon_timeseries_models_training(**_training_kwargs)
@@ -234,7 +217,6 @@ def autogluon_timeseries_training_pipeline(
         training_task_sp.set_cpu_request("4").set_memory_request("16Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
-        _add_mlflow_logger(training_task_sp)
 
 
 if __name__ == "__main__":

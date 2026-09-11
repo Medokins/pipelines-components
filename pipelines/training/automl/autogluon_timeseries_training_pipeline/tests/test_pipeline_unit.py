@@ -146,8 +146,11 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
         assert "componentInputParameter: preset" in content
         assert "condition-branches-1" in content
 
-    def test_compiled_pipeline_wires_mlflow_logger_in_both_branches(self):
-        """MLflow logger runs in both preset branches and exposes registry pipeline inputs."""
+    def test_compiled_pipeline_wires_mlflow_registry_inputs_to_training(self):
+        """Registry inputs are forwarded into the training task.
+
+        The training task now logs to MLflow; the standalone mlflow-logger step no longer exists.
+        """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp_file:
             tmp_path = tmp_file.name
         try:
@@ -159,8 +162,9 @@ class TestAutogluonTimeseriesTrainingPipelineUnitTests:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-        assert "exec-automl-mlflow-logger:" in content
-        assert "exec-automl-mlflow-logger-2:" in content
+        assert "automl-mlflow-logger" not in content
+        assert "exec-autogluon-timeseries-models-training:" in content
+        assert "exec-autogluon-timeseries-models-training-2:" in content
         assert "componentInputParameter: register_best_model" in content
         assert "componentInputParameter: model_registry_name" in content
         assert "componentInputParameter: target_stage" in content

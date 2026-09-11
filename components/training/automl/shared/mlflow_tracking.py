@@ -15,7 +15,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Iterable, Iterator, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -289,10 +289,34 @@ def _install_workspace_request_header(tracking_uri: str, workspace: str) -> None
 
 
 @contextmanager
-def parent_mlflow_run(mlflow: Any, config: MlflowConfig) -> Iterator[Any]:
-    """Resume the platform-created parent run (``parentRunId``) for nested logging."""
+def parent_mlflow_run(mlflow: Any, config: MlflowConfig, *, fallback_name: str = "") -> Iterator[Any]:
+    """Open the parent run for nested logging.
+
+    When the platform provides a ``parentRunId`` (the native RHOAI pipeline-submission
+    path), that run is resumed. When it does not -- e.g. the AutoML tech-preview launcher,
+    which has no MLflow experiment picker -- a parent run is created instead, under an
+    experiment named ``fallback_name`` (typically the KFP run name), get-or-created when the
+    platform also supplied no ``experimentId``.
+    """
     configure_mlflow_client(mlflow, config)
-    with mlflow.start_run(run_id=config.run_id) as run:
+    if config.run_id:
+        with mlflow.start_run(run_id=config.run_id) as run:
+            yield run
+        return
+
+    # No platform parent run: create our own. Bind an experiment first so the run does not
+    # land in MLflow's Default experiment when the platform gave us no experiment id.
+    if not config.experiment_id and fallback_name:
+        try:
+            mlflow.set_experiment(fallback_name)
+        except Exception:
+            logger.exception("Could not set/create MLflow experiment %r; using the default.", fallback_name)
+    start_kwargs: dict[str, Any] = {}
+    if config.experiment_id:
+        start_kwargs["experiment_id"] = config.experiment_id
+    if fallback_name:
+        start_kwargs["run_name"] = fallback_name
+    with mlflow.start_run(**start_kwargs) as run:
         yield run
 
 
@@ -315,46 +339,12 @@ def display_model_run_name(model_name: str) -> str:
     return model_name
 
 
-def _load_model_names(models_artifact: Any) -> list[str]:
-    model_names_raw = models_artifact.metadata.get("model_names", "[]")
-    if isinstance(model_names_raw, str):
-        return json.loads(model_names_raw)
-    return list(model_names_raw)
-
-
-def _load_metrics_json(models_artifact_path: Path, model_name: str) -> dict[str, Any]:
-    metrics_path = models_artifact_path / model_name / "metrics" / "metrics.json"
-    if not metrics_path.is_file():
-        return {}
-    with metrics_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def _normalize_model_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """Flatten artifact metadata that nests scores under ``test_data``."""
     test_data = metrics.get("test_data")
     if isinstance(test_data, dict) and test_data:
         return dict(test_data)
     return dict(metrics)
-
-
-def _load_model_metrics(
-    models_artifact: Any,
-    models_path: Path,
-    model_name: str,
-    context: dict[str, Any],
-) -> dict[str, Any]:
-    """Load per-model metrics from the local artifact tree or pipeline metadata."""
-    metrics = _load_metrics_json(models_path, model_name)
-    if metrics:
-        return metrics
-    for model in context.get("models", []):
-        if model.get("name") != model_name:
-            continue
-        raw_metrics = model.get("metrics", {})
-        if isinstance(raw_metrics, dict):
-            return raw_metrics
-    return {}
 
 
 def _scalar_metrics(metrics: dict[str, Any]) -> dict[str, float]:
@@ -573,9 +563,9 @@ def _child_mlflow_run(
             exc,
         )
 
-    run_tags = [mlflow.entities.RunTag(MLFLOW_PARENT_RUN_ID_TAG, parent_run_id)]
-    for key, value in tags.items():
-        run_tags.append(mlflow.entities.RunTag(key, value))
+    # MlflowClient.create_run takes tags as a plain dict (it builds RunTag objects
+    # internally); passing a list of RunTag raises AttributeError.
+    run_tags = {MLFLOW_PARENT_RUN_ID_TAG: parent_run_id, **tags}
 
     client = mlflow.MlflowClient()
     created_run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=run_tags)
@@ -623,326 +613,398 @@ def _log_optional_metric_artifacts(
         _safe_log_artifact(mlflow, summary, "metrics")
 
 
-def _log_runs_under_parent(
-    mlflow: Any,
-    *,
-    models_artifact: Any,
-    models_path: Path,
-    model_names: list[str],
-    valid_metrics: dict[str, dict[str, Any]],
-    html_artifact_path: str | Path,
-    eval_metric: str,
-    pipeline_name: str,
-    kfp_run_id: str,
-    kfp_run_name: str,
-    task_type: str,
-    preset: str,
-    top_n: int,
-    context: dict[str, Any],
-    autogluon_version: str,
-    scores: list[float],
-    log_model_artifacts: bool,
-    register_best_model: bool,
-    model_registry_name: str,
-    target_stage: str,
-) -> tuple[str, list[str], list[str], dict[str, str]]:
-    parent_active = mlflow.active_run()
-    if parent_active is None:
-        logger.warning("No active MLflow parent run; skipping child run creation.")
-        return "", [], [], {}
+class MlflowExperimentLogger:
+    """Incremental MLflow logger used inside the training components.
 
-    parent_run_id = parent_active.info.run_id
-    experiment_id = parent_active.info.experiment_id
-    child_run_ids: list[str] = []
-    child_run_errors: list[str] = []
-    child_run_id_by_model: dict[str, str] = {}
-    tmp_dir = Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
-    plot_renderer = _load_plot_renderer()
+    Opens a nested child run per model **as each model finishes**, so the experiment
+    updates live during the run instead of being dumped in one batch at the end. It is:
 
-    best_model_name = max(
-        valid_metrics,
-        key=lambda name: float(_normalize_model_metrics(valid_metrics[name]).get(eval_metric, float("-inf"))),
-    )
+    - **Null-safe**: when MLflow is disabled every method is a no-op, so callers need no
+      ``if enabled`` guards.
+    - **Best-effort**: each method swallows its own exceptions and logs them, so tracking
+      problems never fail the surrounding training step.
 
-    mlflow.set_tags(
-        {
-            "pipeline_name": pipeline_name,
-            "kfp_run_id": kfp_run_id,
-            "kfp_run_name": kfp_run_name,
-            "task_type": task_type,
-            "autogluon_version": autogluon_version,
-            "run_type": RUN_TYPE_PIPELINE,
-        }
-    )
+    Typical usage (inside a training component)::
 
-    parent_params: dict[str, Any] = {
-        "eval_metric": eval_metric,
-        "best_model_name": best_model_name,
-        "autogluon_version": autogluon_version,
-    }
-    if preset:
-        parent_params["preset"] = preset
-    if top_n:
-        parent_params["top_n"] = top_n
+        with experiment_run_logger(task_type=..., eval_metric=...) as run_logger:
+            run_logger.log_header(pipeline_name=..., kfp_run_id=..., ...)
+            for model_name in model_names:
+                # ... compute + write this model's metrics/artifacts ...
+                run_logger.log_model(model_name=..., model_dir=..., model_uri=..., metrics=...)
+            run_logger.finalize(html_artifact_path=..., model_names=model_names, ...)
+        logged, tracking_info = run_logger.result()
+    """
 
-    data_config = context.get("data_config", {})
-    if data_config:
-        parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
+    def __init__(
+        self,
+        mlflow: Any,
+        config: MlflowConfig | None,
+        *,
+        task_type: str,
+        eval_metric: str,
+        log_model_artifacts: bool = True,
+    ) -> None:
+        """Store MLflow handles and tracking config; disabled when either is missing."""
+        self._mlflow = mlflow
+        self._config = config
+        self._task_type = task_type
+        self._eval_metric = eval_metric
+        self._log_model_artifacts = log_model_artifacts
+        self.enabled = mlflow is not None and config is not None
+        self.parent_run_id = ""
+        self.experiment_id = config.experiment_id if config else ""
+        self._child_run_ids: list[str] = []
+        self._child_run_id_by_model: dict[str, str] = {}
+        self._child_run_errors: list[str] = []
+        # Populated live by the progress callback (model_name -> child run id) so the refit
+        # loop enriches those runs instead of creating duplicate ones.
+        self._live_child_runs: dict[str, str] = {}
+        self._valid_metrics: dict[str, dict[str, Any]] = {}
+        self._plot_renderer: Any = None
+        self._tmp_dir: Path | None = None
+        self._registry_info: dict[str, str] = {}
 
-    mlflow.log_params(_stringify_params(parent_params))
+    def log_header(
+        self,
+        *,
+        pipeline_name: str,
+        kfp_run_id: str,
+        kfp_run_name: str = "",
+        preset: str = "",
+        top_n: int = 0,
+        data_config: dict[str, Any] | None = None,
+    ) -> None:
+        """Tag the parent run and log run-level params. Call once before ``log_model``."""
+        if not self.enabled:
+            return
+        try:
+            active = self._mlflow.active_run()
+            if active is not None:
+                self.parent_run_id = active.info.run_id
+                self.experiment_id = active.info.experiment_id
+            self._plot_renderer = _load_plot_renderer()
+            self._tmp_dir = Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
+            autogluon_version = _resolve_autogluon_version()
 
-    if scores:
-        mlflow.log_metric("best_score", max(scores))
-        mlflow.log_metric("worst_score", min(scores))
-        mlflow.log_metric("mean_score", sum(scores) / len(scores))
-    mlflow.log_metric("num_models_trained", len(valid_metrics))
+            self._mlflow.set_tags(
+                {
+                    "pipeline_name": pipeline_name,
+                    "kfp_run_id": kfp_run_id,
+                    "kfp_run_name": kfp_run_name,
+                    "task_type": self._task_type,
+                    "autogluon_version": autogluon_version,
+                    "run_type": RUN_TYPE_PIPELINE,
+                }
+            )
+            parent_params: dict[str, Any] = {
+                "eval_metric": self._eval_metric,
+                "autogluon_version": autogluon_version,
+            }
+            if preset:
+                parent_params["preset"] = preset
+            if top_n:
+                parent_params["top_n"] = top_n
+            if data_config:
+                parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
+            self._mlflow.log_params(_stringify_params(parent_params))
+        except Exception:
+            logger.exception("MLflow parent header logging failed; continuing without it.")
 
-    html_path = resolve_leaderboard_html_path(html_artifact_path)
-    if html_path is not None:
-        _safe_log_artifact(mlflow, html_path, "reports")
-    else:
-        logger.warning("Leaderboard HTML not found at %s.", html_artifact_path)
+    def build_progress_callback(self) -> Any | None:
+        """Build a Tabular AutoGluon callback that streams live candidate scores to the parent run.
 
-    summary_path = _write_temp_json(
-        tmp_dir,
-        "leaderboard_summary.json",
-        _build_leaderboard_summary(
-            model_names=model_names,
-            valid_metrics=valid_metrics,
-            eval_metric=eval_metric,
-        ),
-    )
-    _safe_log_artifact(mlflow, summary_path, "reports")
+        Returns ``None`` when tracking is disabled, the parent run is unknown, or the
+        runtime AutoGluon lacks the callback API -- callers should then omit ``callbacks=``.
+        Call after :meth:`log_header` so ``parent_run_id`` is populated.
+        """
+        if not self.enabled or not self.parent_run_id:
+            return None
+        from kfp_components.components.training.automl.shared.mlflow_callbacks import (
+            build_mlflow_progress_callback,
+        )
 
-    base_uri = str(models_artifact.uri).rstrip("/")
-    for model_name in model_names:
-        metrics = valid_metrics.get(model_name)
+        return build_mlflow_progress_callback(
+            self._mlflow,
+            run_id=self.parent_run_id,
+            experiment_id=self.experiment_id,
+            eval_metric=self._eval_metric,
+            kfp_run_id=self._config.run_id if self._config else "",
+            registry=self._live_child_runs,
+        )
+
+    def prune_live_child_runs(self, keep_model_names: Iterable[str]) -> None:
+        """Delete live child runs for candidates that did not make the final top-N.
+
+        The progress callback creates a live nested run for *every* candidate AutoGluon
+        trains during ``fit()`` (including all bagged base models), which is noisy once the
+        leaderboard is known. Call this after selecting the top-N with the model names to
+        keep -- typically the leaderboard head that will be refit and enriched by
+        :meth:`log_model` -- to remove the rest. Best-effort: failures are logged, not raised.
+        """
+        if not self.enabled or not self._live_child_runs:
+            return
+        keep = set(keep_model_names)
+        try:
+            client = self._mlflow.MlflowClient()
+        except Exception:
+            logger.warning("Could not open MLflow client to prune live child runs.", exc_info=True)
+            return
+        for name in list(self._live_child_runs):
+            if name in keep:
+                continue
+            run_id = self._live_child_runs.pop(name)
+            try:
+                client.delete_run(run_id)
+            except Exception:
+                logger.warning(
+                    "Could not delete non-top-N MLflow child run %s (%s); leaving it in place.",
+                    name,
+                    run_id,
+                    exc_info=True,
+                )
+
+    def log_model(
+        self,
+        *,
+        model_name: str,
+        model_dir: Path,
+        model_uri: str,
+        metrics: dict[str, Any],
+    ) -> None:
+        """Create and finalize one nested child run for a single model."""
+        if not self.enabled:
+            return
         if not metrics:
             logger.warning("Skipping MLflow child run for %s: no metrics.", model_name)
-            continue
-
-        model_type, stack_level = parse_model_name(model_name)
-        display_name = display_model_run_name(model_name)
-        model_uri = f"{base_uri}/{model_name}"
-        model_dir = models_path / model_name
-        task_metrics = _metrics_for_task(task_type, metrics)
-
-        child_params: dict[str, Any] = {
-            "model_name": model_name,
-            "model_type": model_type,
-            "stack_level": stack_level,
-            "metrics_path": f"{model_uri}/metrics",
-            "predictor_path": f"{model_uri}/predictor",
-            "notebook_path": f"{model_uri}/notebooks/automl_predictor_notebook.ipynb",
-        }
-        normalized = _normalize_model_metrics(metrics)
-        if "fit_time" in normalized:
-            child_params["fit_time"] = normalized["fit_time"]
-        if "pred_time_val" in normalized:
-            child_params["predict_time"] = normalized["pred_time_val"]
-
-        child_tags = {
-            "run_type": RUN_TYPE_MODEL,
-            "model_name": model_name,
-            "model_type": model_type,
-            "stack_level": str(stack_level),
-            "kfp_run_id": kfp_run_id,
-        }
-
+            return
         try:
-            with _child_mlflow_run(
-                mlflow,
-                experiment_id=experiment_id,
-                parent_run_id=parent_run_id,
-                run_name=display_name,
-                tags=child_tags,
-            ) as _child_run:
-                mlflow.set_tags(child_tags)
-                mlflow.log_params(_stringify_params(child_params))
+            self._valid_metrics[model_name] = metrics
+            model_type, stack_level = parse_model_name(model_name)
+            display_name = display_model_run_name(model_name)
+            task_metrics = _metrics_for_task(self._task_type, metrics)
+
+            child_params: dict[str, Any] = {
+                "model_name": model_name,
+                "model_type": model_type,
+                "stack_level": stack_level,
+                "metrics_path": f"{model_uri}/metrics",
+                "predictor_path": f"{model_uri}/predictor",
+                "notebook_path": f"{model_uri}/notebooks/automl_predictor_notebook.ipynb",
+            }
+            normalized = _normalize_model_metrics(metrics)
+            if "fit_time" in normalized:
+                child_params["fit_time"] = normalized["fit_time"]
+            if "pred_time_val" in normalized:
+                child_params["predict_time"] = normalized["pred_time_val"]
+
+            child_tags = {
+                "run_type": RUN_TYPE_MODEL,
+                "model_name": model_name,
+                "model_type": model_type,
+                "stack_level": str(stack_level),
+                "kfp_run_id": self._config.run_id if self._config else "",
+            }
+
+            tmp_dir = self._tmp_dir or Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
+            # Prefer enriching the live run the progress callback already created for this
+            # model during fit() (matched by name); otherwise open a fresh nested run.
+            live_run_id = self._live_child_runs.get(display_name) or self._live_child_runs.get(model_name)
+            if live_run_id:
+                child_cm = self._mlflow.start_run(run_id=live_run_id)
+            else:
+                child_cm = _child_mlflow_run(
+                    self._mlflow,
+                    experiment_id=self.experiment_id,
+                    parent_run_id=self.parent_run_id,
+                    run_name=display_name,
+                    tags=child_tags,
+                )
+            with child_cm:
+                self._mlflow.set_tags(child_tags)
+                self._mlflow.log_params(_stringify_params(child_params))
                 if task_metrics:
-                    mlflow.log_metrics(task_metrics)
+                    self._mlflow.log_metrics(task_metrics)
                 else:
                     logger.warning("No scalar metrics to log for MLflow child run %s.", display_name)
 
-                metrics_dir = model_dir / "metrics"
                 _log_optional_metric_artifacts(
-                    mlflow,
-                    metrics_dir,
+                    self._mlflow,
+                    model_dir / "metrics",
                     metrics=metrics,
                     display_name=display_name,
                     tmp_dir=tmp_dir,
                 )
-
                 _log_rendered_plots(
-                    mlflow,
-                    task_type=task_type,
+                    self._mlflow,
+                    task_type=self._task_type,
                     model_dir=model_dir,
                     tmp_dir=tmp_dir / f"{display_name}_plots",
-                    plot_renderer=plot_renderer,
+                    plot_renderer=self._plot_renderer,
                 )
+                if self._log_model_artifacts:
+                    _log_model_and_notebook_artifacts(self._mlflow, model_dir)
 
-                if log_model_artifacts:
-                    _log_model_and_notebook_artifacts(mlflow, model_dir)
-
-                active_child = mlflow.active_run()
+                active_child = self._mlflow.active_run()
                 if active_child is not None and active_child.info.run_id:
                     child_run_id = str(active_child.info.run_id)
-                    child_run_ids.append(child_run_id)
-                    child_run_id_by_model[model_name] = child_run_id
+                    self._child_run_ids.append(child_run_id)
+                    self._child_run_id_by_model[model_name] = child_run_id
         except Exception as exc:
-            message = f"{model_name}: {exc}"
-            child_run_errors.append(message)
+            self._child_run_errors.append(f"{model_name}: {exc}")
             logger.exception("Failed to create MLflow child run for model %s.", model_name)
 
-    if child_run_ids:
-        mlflow.log_metric("child_run_count", len(child_run_ids))
-    else:
-        logger.warning(
-            "No MLflow child runs were created under parent run %s. Errors: %s",
-            parent_run_id,
-            child_run_errors,
-        )
-    if child_run_errors:
-        mlflow.set_tag("child_run_errors", json.dumps(child_run_errors)[:500])
+    def finalize(
+        self,
+        *,
+        html_artifact_path: str | Path,
+        model_names: list[str],
+        register_best_model: bool = False,
+        model_registry_name: str = "",
+        target_stage: str = "",
+    ) -> None:
+        """Log parent aggregates, the leaderboard, and (optionally) register the best model."""
+        if not self.enabled:
+            return
+        try:
+            tmp_dir = self._tmp_dir or Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
+            scores = _aggregate_scores(self._valid_metrics, self._eval_metric)
+            if scores:
+                self._mlflow.log_metric("best_score", max(scores))
+                self._mlflow.log_metric("worst_score", min(scores))
+                self._mlflow.log_metric("mean_score", sum(scores) / len(scores))
+            self._mlflow.log_metric("num_models_trained", len(self._valid_metrics))
 
-    registry_info: dict[str, str] = {}
-    if register_best_model:
-        best_child_run_id = child_run_id_by_model.get(best_model_name, "")
+            html_path = resolve_leaderboard_html_path(html_artifact_path)
+            if html_path is not None:
+                _safe_log_artifact(self._mlflow, html_path, "reports")
+            else:
+                logger.warning("Leaderboard HTML not found at %s.", html_artifact_path)
+
+            summary_path = _write_temp_json(
+                tmp_dir,
+                "leaderboard_summary.json",
+                _build_leaderboard_summary(
+                    model_names=model_names,
+                    valid_metrics=self._valid_metrics,
+                    eval_metric=self._eval_metric,
+                ),
+            )
+            _safe_log_artifact(self._mlflow, summary_path, "reports")
+
+            if self._child_run_ids:
+                self._mlflow.log_metric("child_run_count", len(self._child_run_ids))
+            else:
+                logger.warning(
+                    "No MLflow child runs were created under parent run %s. Errors: %s",
+                    self.parent_run_id,
+                    self._child_run_errors,
+                )
+            if self._child_run_errors:
+                self._mlflow.set_tag("child_run_errors", json.dumps(self._child_run_errors)[:500])
+
+            if self._valid_metrics:
+                best_model_name = max(
+                    self._valid_metrics,
+                    key=lambda name: float(
+                        _normalize_model_metrics(self._valid_metrics[name]).get(self._eval_metric, float("-inf"))
+                    ),
+                )
+                self._mlflow.log_param("best_model_name", best_model_name)
+                if register_best_model:
+                    self._register_best(best_model_name, model_registry_name, target_stage)
+        except Exception:
+            logger.exception("MLflow finalize step failed; continuing.")
+
+    def _register_best(self, best_model_name: str, model_registry_name: str, target_stage: str) -> None:
+        best_child_run_id = self._child_run_id_by_model.get(best_model_name, "")
         if not best_child_run_id:
             logger.warning(
                 "register_best_model requested but no child run for best model %s; skipping registration.",
                 best_model_name,
             )
-        elif not model_registry_name:
+            return
+        if not model_registry_name:
             logger.warning("register_best_model requested but model_registry_name is empty; skipping.")
-        else:
-            registry_info = _register_best_model(
-                mlflow,
-                best_child_run_id=best_child_run_id,
-                model_registry_name=model_registry_name,
-                target_stage=target_stage,
-            )
-            for key, value in registry_info.items():
-                mlflow.set_tag(key, value)
+            return
+        self._registry_info = _register_best_model(
+            self._mlflow,
+            best_child_run_id=best_child_run_id,
+            model_registry_name=model_registry_name,
+            target_stage=target_stage,
+        )
+        for key, value in self._registry_info.items():
+            self._mlflow.set_tag(key, value)
 
-    return parent_run_id, child_run_ids, child_run_errors, registry_info
-
-
-def log_automl_results(
-    *,
-    models_artifact: Any,
-    html_artifact_path: str | Path,
-    eval_metric: str,
-    pipeline_name: str,
-    kfp_run_id: str,
-    kfp_run_name: str = "",
-    task_type: str = "",
-    preset: str = "",
-    top_n: int = 0,
-    log_model_artifacts: bool = True,
-    register_best_model: bool = False,
-    model_registry_name: str = "",
-    target_stage: str = "",
-) -> tuple[bool, dict[str, str]]:
-    """Log AutoML experiment results to MLflow.
-
-    Each refitted model becomes a nested child run under the parent experiment run, with
-    its metrics, params, metric-JSON artifacts, rendered plots, and (when
-    ``log_model_artifacts``) its predictor (model.pkl) and notebook. When
-    ``register_best_model`` and ``model_registry_name`` are set, the best model is
-    registered in the MLflow Model Registry and its version tagged with ``target_stage``.
-
-    Returns ``(logged, tracking_info)`` where ``tracking_info`` may contain
-    ``mlflow_run_id``, ``mlflow_experiment_id``, ``mlflow_registered_model`` and
-    ``mlflow_model_version`` after logging.
-    """
-    config = resolve_mlflow_config()
-    if config is None:
-        logger.info("MLflow not enabled (MLFLOW_TRACKING_URI unset); skipping logging.")
-        return False, {}
-
-    try:
-        import mlflow
-    except ImportError:
-        logger.warning("mlflow package is not installed in the runtime image; skipping MLflow logging.")
-        return False, {"error": "mlflow package not installed"}
-
-    models_path = Path(models_artifact.path)
-    model_names = _load_model_names(models_artifact)
-    if not model_names:
-        logger.warning("No model_names in models artifact metadata; skipping MLflow logging.")
-        return False, {}
-
-    context_raw = models_artifact.metadata.get("context", {})
-    if isinstance(context_raw, str):
-        context = json.loads(context_raw)
-    else:
-        context = dict(context_raw) if context_raw else {}
-
-    model_metrics = {name: _load_model_metrics(models_artifact, models_path, name, context) for name in model_names}
-    valid_metrics = {name: metrics for name, metrics in model_metrics.items() if metrics}
-    if not valid_metrics:
-        logger.warning("No metrics.json files found for any model; skipping MLflow logging.")
-        return False, {}
-
-    resolved_task_type = task_type or str(context.get("task_type", ""))
-    autogluon_version = _resolve_autogluon_version()
-
-    scores = _aggregate_scores(valid_metrics, eval_metric)
-    if not scores:
-        logger.warning("No scores found for eval_metric=%r; parent aggregate metrics may be empty.", eval_metric)
-
-    try:
-        parent_run_id = ""
-        child_run_ids: list[str] = []
-        child_run_errors: list[str] = []
-        registry_info: dict[str, str] = {}
-        with parent_mlflow_run(mlflow, config):
-            parent_run_id, child_run_ids, child_run_errors, registry_info = _log_runs_under_parent(
-                mlflow,
-                models_artifact=models_artifact,
-                models_path=models_path,
-                model_names=model_names,
-                valid_metrics=valid_metrics,
-                html_artifact_path=html_artifact_path,
-                eval_metric=eval_metric,
-                pipeline_name=pipeline_name,
-                kfp_run_id=kfp_run_id,
-                kfp_run_name=kfp_run_name,
-                task_type=resolved_task_type,
-                preset=preset,
-                top_n=top_n,
-                context=context,
-                autogluon_version=autogluon_version,
-                scores=scores,
-                log_model_artifacts=log_model_artifacts,
-                register_best_model=register_best_model,
-                model_registry_name=model_registry_name,
-                target_stage=target_stage,
-            )
-
-        experiment_id = config.experiment_id
-        run_id_for_url = parent_run_id or config.run_id
-        tracking_info = {
+    def result(self) -> tuple[bool, dict[str, str]]:
+        """Return ``(logged, tracking_info)`` for recording on the component status."""
+        if not self.enabled or self._config is None:
+            return False, {}
+        run_id_for_url = self.parent_run_id or self._config.run_id
+        tracking_info: dict[str, str] = {
             "mlflow_run_id": run_id_for_url,
-            "mlflow_experiment_id": experiment_id,
-            "tracking_mode": config.mode,
-            "mlflow_child_run_ids": ",".join(child_run_ids),
-            "mlflow_child_run_count": str(len(child_run_ids)),
+            "mlflow_experiment_id": self.experiment_id,
+            "tracking_mode": self._config.mode,
+            "mlflow_child_run_ids": ",".join(self._child_run_ids),
+            "mlflow_child_run_count": str(len(self._child_run_ids)),
         }
-        run_url = build_mlflow_run_url(config.tracking_uri, experiment_id, run_id_for_url)
+        run_url = build_mlflow_run_url(self._config.tracking_uri, self.experiment_id, run_id_for_url)
         if run_url:
             tracking_info["mlflow_run_url"] = run_url
-        tracking_info.update(registry_info)
-        if child_run_errors:
-            tracking_info["mlflow_child_run_errors"] = json.dumps(child_run_errors)
-        logger.info(
-            "Logged AutoML results to MLflow (%s mode, parent run %s, %d child runs).",
-            config.mode,
-            tracking_info["mlflow_run_id"],
-            len(child_run_ids),
-        )
+        tracking_info.update(self._registry_info)
+        if self._child_run_errors:
+            tracking_info["mlflow_child_run_errors"] = json.dumps(self._child_run_errors)
         return True, tracking_info
-    except Exception as exc:
-        logger.exception("MLflow logging failed for pipeline run %s.", kfp_run_id)
-        return False, {"error": str(exc), "tracking_mode": config.mode}
+
+
+@contextmanager
+def experiment_run_logger(
+    *,
+    task_type: str,
+    eval_metric: str,
+    log_model_artifacts: bool = True,
+    run_name: str = "",
+) -> Iterator[MlflowExperimentLogger]:
+    """Yield an :class:`MlflowExperimentLogger` bound to the parent run.
+
+    Resolves ``KFP_MLFLOW_CONFIG`` and imports MLflow lazily. When the platform supplies a
+    ``parentRunId`` that run is resumed; otherwise a parent run (and, if needed, an
+    experiment) named ``run_name`` is created. When tracking is disabled or the parent run
+    cannot be opened, a disabled (no-op) logger is yielded so the caller proceeds unchanged.
+    The parent run is closed when the ``with`` block exits.
+    """
+    config = resolve_mlflow_config()
+    mlflow_mod: Any = None
+    if config is not None:
+        try:
+            import mlflow as mlflow_mod  # type: ignore[no-redef]
+        except ImportError:
+            logger.warning("mlflow package is not installed in the runtime image; skipping MLflow logging.")
+            mlflow_mod = None
+
+    run_logger = MlflowExperimentLogger(
+        mlflow_mod,
+        config,
+        task_type=task_type,
+        eval_metric=eval_metric,
+        log_model_artifacts=log_model_artifacts,
+    )
+    if not run_logger.enabled:
+        yield run_logger
+        return
+
+    parent_cm = parent_mlflow_run(mlflow_mod, config, fallback_name=run_name)
+    try:
+        parent_cm.__enter__()
+    except Exception:
+        logger.exception("Failed to open MLflow parent run; disabling tracking for this step.")
+        run_logger.enabled = False
+        yield run_logger
+        return
+
+    try:
+        yield run_logger
+    finally:
+        try:
+            parent_cm.__exit__(None, None, None)
+        except Exception:
+            logger.exception("Error while closing MLflow parent run.")

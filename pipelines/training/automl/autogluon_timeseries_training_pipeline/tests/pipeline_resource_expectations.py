@@ -12,6 +12,4 @@ AUTOML_TIMESERIES_EXECUTOR_RESOURCES = {
     "timeseries-data-loader": WORKLOAD_RESOURCES,
     "autogluon-timeseries-models-training": TRAINING_BALANCED_RESOURCES,
     "autogluon-timeseries-models-training-2": TRAINING_SPEED_RESOURCES,
-    "automl-mlflow-logger": STAGE_MAP_RESOURCES,
-    "automl-mlflow-logger-2": STAGE_MAP_RESOURCES,
 }

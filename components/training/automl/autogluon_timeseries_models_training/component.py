@@ -29,6 +29,11 @@ def autogluon_timeseries_models_training(
     known_covariates_names: Optional[List[str]] = None,
     preset: str = "speed",
     eval_metric: str = "mean_absolute_scaled_error",
+    run_name: str = "",
+    log_model_artifacts: bool = True,
+    register_best_model: bool = False,
+    model_registry_name: str = "",
+    target_stage: str = "",
 ) -> NamedTuple(
     "outputs",
     top_models=List[str],
@@ -71,6 +76,23 @@ def autogluon_timeseries_models_training(
         eval_metric: Metric for model ranking (e.g. ``"mean_absolute_scaled_error"``,
             ``"weighted_quantile_loss"``). Defaults to ``"mean_absolute_scaled_error"``.
             Legacy uppercase acronyms (e.g. ``"MASE"``) are accepted and normalized to snake_case.
+        run_name: Per-execution MLflow run name recorded as a tag on child runs. Falls
+            back to ``pipeline_name`` when empty.
+        log_model_artifacts: When True, upload each model's predictor and notebook to its
+            MLflow child run.
+        register_best_model: When True, register the best model in the MLflow Model
+            Registry (requires ``model_registry_name``).
+        model_registry_name: Registered-model name to use when ``register_best_model`` is True.
+        target_stage: Optional deployment-stage value set as a ``target_stage`` tag on the
+            registered best-model version.
+
+    MLflow logging:
+        When the platform injects ``KFP_MLFLOW_CONFIG``, results are logged to MLflow
+        incrementally: the parent run is opened before the refit loop and each refitted
+        model becomes a nested child run as it finishes, with parent aggregates plus
+        best-model registration finalized at the end. ``TimeSeriesPredictor`` has no
+        callback API, so there is no live per-candidate streaming during ``fit()``. All
+        MLflow work is best-effort and never fails training.
 
     Returns:
         NamedTuple: top_models list, predictor_path, eval_metric, model_config.
@@ -125,6 +147,8 @@ def autogluon_timeseries_models_training(
                 raise TypeError(f"{param} must be a non-empty string.")
         if eval_metric not in METRIC_ALIASES:
             raise ValueError(f"eval_metric must be one of {sorted(METRIC_ALIASES)}; got {eval_metric!r}.")
+        if register_best_model and not model_registry_name.strip():
+            raise ValueError("model_registry_name must be a non-empty string when register_best_model is True.")
         if not isinstance(top_n, int):
             raise TypeError("top_n must be an integer.")
         if top_n <= 0 or top_n > TOP_N_MAX:
@@ -377,6 +401,35 @@ def autogluon_timeseries_models_training(
 
         ts_inference_block = _build_timeseries_inference_block()
 
+        # Open the MLflow parent run around the refit loop so each model is logged as a
+        # nested child run the moment it finishes (incremental updates). TimeSeriesPredictor
+        # has no callback API, so there is no live per-candidate streaming during fit().
+        # Best-effort: a disabled logger is a no-op. Entered via ExitStack to avoid
+        # re-indenting the loop; closed just before status recording below.
+        from contextlib import ExitStack
+
+        from kfp_components.components.training.automl.shared.mlflow_tracking import (
+            experiment_run_logger,
+        )
+
+        mlflow_stack = ExitStack()
+        run_logger = mlflow_stack.enter_context(
+            experiment_run_logger(
+                task_type="time_series",
+                eval_metric=eval_metric,
+                log_model_artifacts=log_model_artifacts,
+                run_name=run_name,
+            )
+        )
+        run_logger.log_header(
+            pipeline_name=pipeline_name,
+            kfp_run_id=run_id,
+            kfp_run_name=run_name,
+            preset=preset,
+            top_n=top_n,
+            data_config={"sampling_config": sampling_config, "split_config": split_config},
+        )
+
         for model_name in top_models:
             try:
                 model_name_full = f"{model_name}_FULL"
@@ -522,6 +575,15 @@ def autogluon_timeseries_models_training(
                 model_names_full.append(model_name_full)
                 models_metadata.append(model_metadata)
 
+                # Log this model to MLflow as a nested child run as soon as it is finalized,
+                # so the experiment updates live. Best-effort: never fails the refit loop.
+                run_logger.log_model(
+                    model_name=model_name_full,
+                    model_dir=output_path,
+                    model_uri=f"{models_artifact.uri.rstrip('/')}/{model_name_full}",
+                    metrics={"test_data": metrics_dict},
+                )
+
             except Exception as e:
                 logger.error("Refit failed for model '%s': %s", model_name, e)
                 failed_models.append(model_name)
@@ -609,6 +671,25 @@ def autogluon_timeseries_models_training(
             best_model=best_model_name,
             model_count=n,
         )
+
+        # Log parent aggregates + leaderboard and (optionally) register the best model, then
+        # close the MLflow parent run. Best-effort: never fails the training step.
+        status.record("log_mlflow_results", "started")
+        run_logger.finalize(
+            html_artifact_path=html_artifact.path,
+            model_names=model_names_full,
+            register_best_model=register_best_model,
+            model_registry_name=model_registry_name,
+            target_stage=target_stage,
+        )
+        logged_to_mlflow, mlflow_tracking_info = run_logger.result()
+        mlflow_stack.close()
+        if logged_to_mlflow:
+            for key, value in mlflow_tracking_info.items():
+                component_status.metadata[key] = value
+            status.record("log_mlflow_results", "completed", **mlflow_tracking_info)
+        else:
+            status.record("log_mlflow_results", "skipped")
 
         models_artifact.metadata["model_names"] = json.dumps(model_names_full)
         models_artifact.metadata["context"] = {

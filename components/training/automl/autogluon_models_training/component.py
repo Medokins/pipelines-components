@@ -27,6 +27,11 @@ def autogluon_models_training(
     positive_class: str = "",
     preset: str = "speed",
     eval_metric: str = "",
+    run_name: str = "",
+    log_model_artifacts: bool = True,
+    register_best_model: bool = False,
+    model_registry_name: str = "",
+    target_stage: str = "",
 ) -> NamedTuple("outputs", eval_metric=str, best_model_name=str):
     """Train AutoGluon models, select the top N, and refit each on the full dataset.
 
@@ -70,6 +75,23 @@ def autogluon_models_training(
             (may run more than 2x longer).
         eval_metric: Metric for model ranking (e.g. ``"r2"``, ``"accuracy"``). Defaults
             to ``"r2"`` for regression and ``"accuracy"`` otherwise.
+        run_name: Per-execution MLflow run name recorded as a tag on child runs. Falls
+            back to ``pipeline_name`` when empty.
+        log_model_artifacts: When True, upload each model's predictor (model.pkl) and
+            notebook to its MLflow child run.
+        register_best_model: When True, register the best model in the MLflow Model
+            Registry (requires ``model_registry_name``).
+        model_registry_name: Registered-model name to use when ``register_best_model`` is True.
+        target_stage: Optional deployment-stage value set as a ``target_stage`` tag on the
+            registered best-model version.
+
+    MLflow logging:
+        When the platform injects ``KFP_MLFLOW_CONFIG``, results are logged to MLflow
+        incrementally: the parent run is opened before ``fit()`` (so a live-progress
+        callback streams each candidate's validation score during the search), each
+        refitted model becomes a nested child run as it is processed, and parent
+        aggregates plus best-model registration are finalized at the end. All MLflow work
+        is best-effort and never fails training.
 
     Returns:
         NamedTuple with ``eval_metric`` (the metric used for ranking, e.g. ``"r2"`` or ``"accuracy"``)
@@ -136,6 +158,8 @@ def autogluon_models_training(
             f"eval_metric {eval_metric!r} is not valid for task_type={task_type!r}. "
             f"Valid options: {sorted(METRICS.get(task_type, {}))}."
         )
+    if register_best_model and not model_registry_name.strip():
+        raise ValueError("model_registry_name must be a non-empty string when register_best_model is True.")
 
     sampling_config = sampling_config or {}
     split_config = split_config or {}
@@ -237,6 +261,36 @@ def autogluon_models_training(
                 "classes ['abc', 'def'] -> positive_class='def')."
             )
 
+        # Open the MLflow parent run around the whole training so results are logged
+        # incrementally (one child run per model) and a live-progress callback can stream
+        # each candidate's validation score during fit(). Best-effort: a disabled logger
+        # is a no-op. Entered via ExitStack to avoid re-indenting the large training body;
+        # closed just before status recording below.
+        from contextlib import ExitStack
+
+        from kfp_components.components.training.automl.shared.mlflow_tracking import (
+            experiment_run_logger,
+        )
+
+        mlflow_stack = ExitStack()
+        run_logger = mlflow_stack.enter_context(
+            experiment_run_logger(
+                task_type=task_type,
+                eval_metric=eval_metric,
+                log_model_artifacts=log_model_artifacts,
+                run_name=run_name,
+            )
+        )
+        run_logger.log_header(
+            pipeline_name=pipeline_name,
+            kfp_run_id=run_id,
+            kfp_run_name=run_name,
+            preset=preset,
+            top_n=top_n,
+            data_config={"sampling_config": sampling_config, "split_config": split_config},
+        )
+        progress_callback = run_logger.build_progress_callback()
+
         status.record("model_selection", "started")
         time_limit = PRESET_TIME_LIMITS[preset]
         predictor = TabularPredictor(**predictor_init_kwargs).fit(
@@ -251,12 +305,19 @@ def autogluon_models_training(
             time_limit=time_limit,
             # exclude CatBoost models
             excluded_model_types=["CAT"],
+            # Streams live candidate validation scores to the MLflow parent run; omitted when
+            # tracking is disabled or the callback API is unavailable.
+            callbacks=[progress_callback] if progress_callback else None,
         )
 
         # Select top N models
         leaderboard = predictor.leaderboard(test_data_df)
         logger.info("Leaderboard:\n\n %s", leaderboard.head(top_n).to_string())
         top_models = leaderboard.head(top_n)["model"].values.tolist()
+        # The live-progress callback creates a nested run for every candidate trained during
+        # fit() (all bagged base models included); now that the leaderboard is known, drop the
+        # runs for models outside the top-N so the MLflow experiment only shows the finalists.
+        run_logger.prune_live_child_runs(top_models)
         status.record(
             "model_selection",
             "completed",
@@ -699,6 +760,16 @@ def autogluon_models_training(
             with (Path(models_artifact.path) / model_name_full / "model.json").open("w", encoding="utf-8") as f:
                 json.dump(model_metadata, f, indent=2)
 
+            # Log this model to MLflow as a nested child run as soon as it is finalized, so
+            # the experiment updates live. Kept sequential (out of the ThreadPoolExecutor
+            # above) because the MLflow fluent API is not thread-safe.
+            run_logger.log_model(
+                model_name=model_name_full,
+                model_dir=Path(models_artifact.path) / model_name_full,
+                model_uri=f"{models_artifact.uri.rstrip('/')}/{model_name_full}",
+                metrics={"test_data": eval_results},
+            )
+
         status.record(
             "refit_and_evaluate",
             "completed",
@@ -773,6 +844,25 @@ def autogluon_models_training(
             best_model=best_model_name,
             model_count=n,
         )
+
+        # Log parent aggregates + leaderboard and (optionally) register the best model, then
+        # close the MLflow parent run. Best-effort: never fails the training step.
+        status.record("log_mlflow_results", "started")
+        run_logger.finalize(
+            html_artifact_path=html_artifact.path,
+            model_names=model_names_full,
+            register_best_model=register_best_model,
+            model_registry_name=model_registry_name,
+            target_stage=target_stage,
+        )
+        logged_to_mlflow, mlflow_tracking_info = run_logger.result()
+        mlflow_stack.close()
+        if logged_to_mlflow:
+            for key, value in mlflow_tracking_info.items():
+                component_status.metadata[key] = value
+            status.record("log_mlflow_results", "completed", **mlflow_tracking_info)
+        else:
+            status.record("log_mlflow_results", "skipped")
 
         # Serialize as a JSON string and parse back in downstream components.
         models_artifact.metadata["model_names"] = json.dumps(model_names_full)
