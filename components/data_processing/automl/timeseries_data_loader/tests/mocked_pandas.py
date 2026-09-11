@@ -249,7 +249,13 @@ class MockedDataFrame:
 
     def __setitem__(self, key, value):
         """Assign a column from a list or ``MockSeries`` (same length as frame)."""
-        idx = self._columns.index(key)
+        if key in self._columns:
+            idx = self._columns.index(key)
+        else:
+            self._columns.append(key)
+            for row in self._rows:
+                row.append(None)
+            idx = len(self._columns) - 1
         if isinstance(value, MockSeries):
             vals = value._values
         else:
@@ -354,7 +360,8 @@ def _read_csv_chunks(text_stream, chunksize):
         return
     rows = list(reader)
     if not rows:
-        yield MockedDataFrame(header, [])
+        # Match pandas: a header-only CSV yields no chunks at all, so the caller never
+        # sees the header either. The tabular mock behaves the same way.
         return
     for start in range(0, len(rows), chunksize):
         chunk_rows = [[_parse_csv_cell(c) for c in row] for row in rows[start : start + chunksize]]

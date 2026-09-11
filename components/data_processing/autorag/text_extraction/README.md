@@ -6,7 +6,7 @@
 
 Text Extraction component.
 
-Thin wrapper that delegates to ``ai4rag.components.data.text_extraction.extract_text``.
+Thin wrapper that delegates to ``ai4rag.utils.data.text_extraction.extract_text``.
 
 ## Inputs 📥
 
@@ -57,6 +57,9 @@ def example_pipeline():
   - Approvers:
     - LukaszCmielowski
     - DorotaDR
+    - Mateusz-Switala
+    - filip-komarzyniec
+    - jakub-walaszczyk
   - Reviewers:
     - filip-komarzyniec
     - jakub-walaszczyk
