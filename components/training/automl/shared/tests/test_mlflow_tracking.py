@@ -321,6 +321,7 @@ def _run_logger_lifecycle(
     register_best_model: bool = False,
     model_registry_name: str = "",
     target_stage: str = "",
+    notebook_path: Path | None = None,
 ):
     """Drive a full ``experiment_run_logger`` lifecycle and return ``result()``."""
     metrics_by_model = metrics_by_model or {name: {"accuracy": 0.9} for name in model_names}
@@ -344,6 +345,7 @@ def _run_logger_lifecycle(
                     model_dir=tmp_path / model_name,
                     model_uri=f"s3://bucket/models/{model_name}",
                     metrics={"test_data": metrics_by_model[model_name]},
+                    notebook_path=notebook_path,
                 )
             run_logger.finalize(
                 html_artifact_path=html_path,
@@ -430,10 +432,11 @@ class TestMlflowExperimentLogger:
         logged, tracking_info = run_logger.result()
 
         assert logged is True
-        # Reopened the live run by id and did NOT open a second nested run for it.
-        mock_mlflow.start_run.assert_any_call(run_id="live-child-1")
-        nested_calls = [c for c in mock_mlflow.start_run.call_args_list if c.kwargs.get("nested")]
-        assert nested_calls == []
+        # Reopened the live run by id (nested, since the parent stays active) and did NOT
+        # open a second nested run via run_name for it.
+        mock_mlflow.start_run.assert_any_call(run_id="live-child-1", nested=True)
+        new_child_calls = [c for c in mock_mlflow.start_run.call_args_list if c.kwargs.get("run_name")]
+        assert new_child_calls == []
         assert tracking_info["mlflow_child_run_ids"] == "live-child-1"
 
     def test_prune_live_child_runs_deletes_non_top_n(self, tmp_path, monkeypatch):
@@ -576,8 +579,52 @@ class TestMlflowExperimentLogger:
         mock_mlflow.start_run.assert_any_call(run_name="WeightedEnsemble_L3", nested=True)
         mock_mlflow.start_run.assert_any_call(run_name="CatBoost_BAG_L1", nested=True)
 
-    def test_uploads_model_and_notebook_artifacts(self, tmp_path, monkeypatch):
-        """Upload the predictor dir (model.pkl) and notebook per child run."""
+    def test_uploads_model_and_sanitized_notebook_only(self, tmp_path, monkeypatch):
+        """Upload the predictor dir plus ONLY the caller-provided sanitized notebook.
+
+        The data-bearing notebook rendered into ``model_dir`` must never be uploaded to the
+        tracking server; only the sanitized notebook passed via ``notebook_path`` is.
+        """
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
+        predictor_dir = tmp_path / model_name / "predictor"
+        predictor_dir.mkdir(parents=True)
+        (predictor_dir / "model.pkl").write_bytes(b"payload")
+        # Real-data notebook rendered into model_dir (must NOT be uploaded).
+        notebook_dir = tmp_path / model_name / "notebooks"
+        notebook_dir.mkdir(parents=True)
+        real_notebook = notebook_dir / "automl_predictor_notebook.ipynb"
+        real_notebook.write_text('{"sensitive": "customer-value"}', encoding="utf-8")
+        # Sanitized notebook the caller opts to upload.
+        sanitized_notebook = tmp_path / "sanitized.ipynb"
+        sanitized_notebook.write_text('{"placeholder": "<number>"}', encoding="utf-8")
+
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")])
+        logged, _ = _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.91}},
+            log_model_artifacts=True,
+            notebook_path=sanitized_notebook,
+        )
+
+        assert logged is True
+        assert any(call.kwargs.get("artifact_path") == "model" for call in mock_mlflow.log_artifacts.call_args_list)
+        notebook_calls = [
+            call for call in mock_mlflow.log_artifact.call_args_list if call.kwargs.get("artifact_path") == "notebooks"
+        ]
+        assert len(notebook_calls) == 1
+        uploaded_paths = {
+            str(call.args[0]) if call.args else str(call.kwargs.get("local_path")) for call in notebook_calls
+        }
+        assert str(sanitized_notebook) in uploaded_paths
+        assert str(real_notebook) not in uploaded_paths
+
+    def test_no_notebook_uploaded_without_sanitized_path(self, tmp_path, monkeypatch):
+        """Fail safe: with no sanitized notebook provided, no notebook is uploaded."""
         _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
 
         model_name = "LightGBM_BAG_L1_FULL"
@@ -587,7 +634,9 @@ class TestMlflowExperimentLogger:
         (predictor_dir / "model.pkl").write_bytes(b"payload")
         notebook_dir = tmp_path / model_name / "notebooks"
         notebook_dir.mkdir(parents=True)
-        (notebook_dir / "automl_predictor_notebook.ipynb").write_text("{}", encoding="utf-8")
+        (notebook_dir / "automl_predictor_notebook.ipynb").write_text(
+            '{"sensitive": "customer-value"}', encoding="utf-8"
+        )
 
         mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")])
         logged, _ = _run_logger_lifecycle(
@@ -600,7 +649,9 @@ class TestMlflowExperimentLogger:
 
         assert logged is True
         assert any(call.kwargs.get("artifact_path") == "model" for call in mock_mlflow.log_artifacts.call_args_list)
-        assert any(call.kwargs.get("artifact_path") == "notebooks" for call in mock_mlflow.log_artifact.call_args_list)
+        assert not any(
+            call.kwargs.get("artifact_path") == "notebooks" for call in mock_mlflow.log_artifact.call_args_list
+        )
 
     def test_registers_best_model_and_sets_target_stage(self, tmp_path, monkeypatch):
         """Register the best model and tag its version with target_stage."""

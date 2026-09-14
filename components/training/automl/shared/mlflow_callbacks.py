@@ -131,6 +131,8 @@ class _MlflowProgressCallback(_AbstractCallback):
         """Create and finalize a nested child run for one freshly trained model."""
         if self._client is None:
             return
+        run_id = None
+        succeeded = False
         try:
             model_type, stack_level = _parse_model_name(model_name)
             tags = {
@@ -154,12 +156,20 @@ class _MlflowProgressCallback(_AbstractCallback):
                 self._client.log_metric(run_id, CANDIDATE_VAL_SCORE_METRIC, float(score))
             if fit_time is not None:
                 self._client.log_metric(run_id, CANDIDATE_FIT_TIME_METRIC, float(fit_time))
-            # Finish the run so it displays as complete; the refit loop reopens it by id
-            # (via the shared registry) to add test metrics/artifacts when applicable.
-            self._client.set_terminated(run_id, status="FINISHED")
-            self._registry[model_name] = run_id
+            succeeded = True
         except Exception:
             logger.warning("Failed to create live MLflow child run for %s; continuing.", model_name, exc_info=True)
+        finally:
+            # Always terminate a created run so it never leaks as RUNNING. Mark it FINISHED
+            # only when metric logging succeeded; a partial run is FAILED. Register the run
+            # for later reopen (refit loop adds test metrics/artifacts) only on success.
+            if run_id is not None:
+                try:
+                    self._client.set_terminated(run_id, status="FINISHED" if succeeded else "FAILED")
+                except Exception:
+                    logger.debug("Failed to terminate MLflow child run %s.", run_id, exc_info=True)
+                if succeeded:
+                    self._registry[model_name] = run_id
 
     def _log_parent_progress(self, count: int) -> None:
         if self._client is None:

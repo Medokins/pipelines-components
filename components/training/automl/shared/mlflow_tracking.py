@@ -454,14 +454,22 @@ def _load_plot_renderer() -> Any:
             return None
 
 
-def _log_model_and_notebook_artifacts(mlflow: Any, model_dir: Path) -> dict[str, bool]:
-    """Upload the deployment predictor (model.pkl) and the model notebook to MLflow."""
+def _log_model_and_notebook_artifacts(
+    mlflow: Any, model_dir: Path, *, notebook_path: Path | None = None
+) -> dict[str, bool]:
+    """Upload the deployment predictor (model.pkl) and a model notebook to MLflow.
+
+    The deployment predictor is data-stripped (``clone_for_deployment``), so it is safe
+    to upload. The model notebook rendered into ``model_dir`` embeds real sample rows and
+    is NEVER uploaded to the tracking server; callers must pass a pre-sanitized notebook
+    (typed placeholders instead of real values) via ``notebook_path`` to have a notebook
+    uploaded. When ``notebook_path`` is None, no notebook is uploaded (fail safe).
+    """
     results = {"model": False, "notebook": False}
     predictor_dir = model_dir / MODEL_PREDICTOR_SUBDIR
     if _safe_log_artifacts_dir(mlflow, predictor_dir, "model"):
         results["model"] = True
-    notebook_path = model_dir / MODEL_NOTEBOOK_RELPATH
-    if _safe_log_artifact(mlflow, notebook_path, "notebooks"):
+    if notebook_path is not None and _safe_log_artifact(mlflow, Path(notebook_path), "notebooks"):
         results["notebook"] = True
     return results
 
@@ -559,15 +567,19 @@ def _child_mlflow_run(
 ) -> Iterator[Any]:
     """Open a nested child run, falling back to explicit parent linkage when needed."""
     try:
-        with mlflow.start_run(run_name=run_name, nested=True) as run:
-            yield run
-            return
+        started = mlflow.start_run(run_name=run_name, nested=True)
     except Exception as exc:
         logger.warning(
             "MLflow nested child run failed for %s (%s); trying MlflowClient.create_run.",
             run_name,
             exc,
         )
+    else:
+        # yield outside the except so caller-body exceptions propagate unchanged
+        # instead of being caught here and triggering the create_run fallback.
+        with started as run:
+            yield run
+        return
 
     # MlflowClient.create_run takes tags as a plain dict (it builds RunTag objects
     # internally); passing a list of RunTag raises AttributeError.
@@ -576,7 +588,9 @@ def _child_mlflow_run(
     client = mlflow.MlflowClient()
     created_run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=run_tags)
     try:
-        with mlflow.start_run(run_id=created_run.info.run_id) as run:
+        # nested=True: the parent run is still active, so reopening this child by run_id
+        # would otherwise be rejected by MLflow.
+        with mlflow.start_run(run_id=created_run.info.run_id, nested=True) as run:
             yield run
     except Exception as exc:
         client.set_terminated(created_run.info.run_id, status="FAILED")
@@ -776,8 +790,14 @@ class MlflowExperimentLogger:
         model_dir: Path,
         model_uri: str,
         metrics: dict[str, Any],
+        notebook_path: Path | None = None,
     ) -> None:
-        """Create and finalize one nested child run for a single model."""
+        """Create and finalize one nested child run for a single model.
+
+        ``notebook_path`` is an optional pre-sanitized inference notebook (typed
+        placeholders instead of real sample rows). Only this notebook is uploaded as an
+        artifact; the data-bearing notebook rendered into ``model_dir`` is never uploaded.
+        """
         if not self.enabled:
             return
         if not metrics:
@@ -816,7 +836,9 @@ class MlflowExperimentLogger:
             # model during fit() (matched by name); otherwise open a fresh nested run.
             live_run_id = self._live_child_runs.get(display_name) or self._live_child_runs.get(model_name)
             if live_run_id:
-                child_cm = self._mlflow.start_run(run_id=live_run_id)
+                # nested=True: parent run is still active, so reopening this child by run_id
+                # would otherwise be rejected by MLflow.
+                child_cm = self._mlflow.start_run(run_id=live_run_id, nested=True)
             else:
                 child_cm = _child_mlflow_run(
                     self._mlflow,
@@ -848,7 +870,7 @@ class MlflowExperimentLogger:
                     plot_renderer=self._plot_renderer,
                 )
                 if self._log_model_artifacts:
-                    _log_model_and_notebook_artifacts(self._mlflow, model_dir)
+                    _log_model_and_notebook_artifacts(self._mlflow, model_dir, notebook_path=notebook_path)
 
                 active_child = self._mlflow.active_run()
                 if active_child is not None and active_child.info.run_id:

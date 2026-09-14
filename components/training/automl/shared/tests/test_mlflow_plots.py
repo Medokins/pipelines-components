@@ -65,6 +65,40 @@ class TestRenderRocCurve:
         assert mlflow_plots.render_roc_curve({"task_type": "binary"}, tmp_path / "roc.png") is None
 
 
+class TestRenderTimeseriesPlots:
+    """Back-testing forecast-vs-actual rendering."""
+
+    def test_actual_only_window_is_still_rendered(self, tmp_path):
+        """A window with only actual data (no forecast mean) must still produce a plot."""
+        model_dir = tmp_path / "ETS_FULL"
+        _write_metrics(
+            model_dir,
+            "back_testing.json",
+            {
+                "windows": [
+                    {
+                        "forecast_data": [
+                            {
+                                "timestamps": ["2020-01-01", "2020-01-02", "2020-01-03"],
+                                "actual": [1.0, 2.0, 3.0],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+        out_dir = tmp_path / "plots"
+        written = mlflow_plots.render_timeseries_plots(model_dir, out_dir)
+        assert [p.name for p in written] == ["back_testing.png"]
+        assert all(p.is_file() for p in written)
+
+    def test_empty_windows_returns_empty(self, tmp_path):
+        """Return no plots when no window supplies any drawable series."""
+        model_dir = tmp_path / "ETS_FULL"
+        _write_metrics(model_dir, "back_testing.json", {"windows": [{"forecast_data": [{}]}]})
+        assert mlflow_plots.render_timeseries_plots(model_dir, tmp_path / "plots") == []
+
+
 class TestRenderModelPlots:
     """Dispatch by task type over a model directory."""
 

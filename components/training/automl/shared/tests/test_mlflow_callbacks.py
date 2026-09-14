@@ -121,6 +121,27 @@ class TestBuildMlflowProgressCallback:
         mock_client.log_metric.assert_any_call("parent-run", CANDIDATES_TRAINED_METRIC, 1.0, step=1)
         assert registry == {"LightGBM": "child-1"}
 
+    def test_partial_child_run_is_terminated_failed_and_not_registered(self):
+        """If metric logging fails after run creation, the run is FAILED, not left RUNNING."""
+        mock_mlflow, mock_client = _mlflow_with_client(["child-1"])
+        mock_client.log_metric.side_effect = RuntimeError("transient mlflow error")
+        registry: dict[str, str] = {}
+
+        with _fake_autogluon():
+            callback = build_mlflow_progress_callback(
+                mock_mlflow, run_id="parent-run", experiment_id="1", registry=registry
+            )
+
+        trainer = _trainer_with_stats({"LightGBM": {"val_score": 0.9, "fit_time": 1.5}})
+        # Must not raise even though log_metric fails.
+        result = callback._after_model_fit(trainer, model_names=["LightGBM"])
+
+        assert result is False
+        # Run was created then terminated as FAILED (never left RUNNING).
+        mock_client.set_terminated.assert_any_call("child-1", status="FAILED")
+        # A partial run must not be registered for later reopen/reuse.
+        assert registry == {}
+
     def test_increments_and_dedupes_seen_models(self):
         """Distinct models each get a run; a repeat model is not re-created."""
         mock_mlflow, mock_client = _mlflow_with_client(["child-1", "child-2"])

@@ -184,18 +184,26 @@ def render_timeseries_plots(model_dir: Path, out_dir: Path) -> list[Path]:
     try:
         plt = _matplotlib()
         fig, ax = plt.subplots(figsize=(8, 4))
+        # plotted: was any series drawn at all (keep the figure). forecast_labeled /
+        # actual_labeled: track each legend entry independently so an actual-only window is
+        # not discarded and the "actual" label is not suppressed when a forecast drew first.
         plotted = False
+        forecast_labeled = False
+        actual_labeled = False
         for index, window in enumerate(windows):
             forecast = window.get("forecast_data") or window.get("forecast") or []
             for series in forecast if isinstance(forecast, list) else []:
                 timestamps = series.get("timestamps") or series.get("timestamp")
                 mean = series.get("mean") or series.get("0.5")
                 if timestamps and mean:
-                    ax.plot(range(len(mean)), mean, label=f"window {index} forecast" if not plotted else None)
+                    ax.plot(range(len(mean)), mean, label=f"window {index} forecast" if not forecast_labeled else None)
+                    forecast_labeled = True
                     plotted = True
                 actual = series.get("actual") or series.get("target")
                 if actual:
-                    ax.plot(range(len(actual)), actual, linestyle="--", label="actual" if not plotted else None)
+                    ax.plot(range(len(actual)), actual, linestyle="--", label="actual" if not actual_labeled else None)
+                    actual_labeled = True
+                    plotted = True
         if not plotted:
             plt.close(fig)
             return []

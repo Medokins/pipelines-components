@@ -1053,8 +1053,9 @@ class TestAutogluonModelsTrainingUnitTests:
         # Must be inside workspace (PVC), not inside models_artifact path (S3)
         assert clone_path == expected_work_path
         assert not str(clone_path).startswith(models_output_dir)
-        # Work dir cleaned up after all models are saved
-        mock_rmtree.assert_called_once_with(expected_work_path, ignore_errors=True)
+        # Work dir cleaned up after all models are saved (the sanitized-notebook temp dir
+        # is also removed, so there may be more than one rmtree call).
+        mock_rmtree.assert_any_call(expected_work_path, ignore_errors=True)
 
     @mock.patch("pandas.read_csv")
     @mock.patch("autogluon.tabular.TabularPredictor")
