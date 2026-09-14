@@ -1,3 +1,5 @@
+from typing import Optional
+
 from kfp import dsl
 from kfp.kubernetes import use_secret_as_env
 from kfp_components.components.data_processing.autorag.documents_discovery import (
@@ -55,6 +57,8 @@ def documents_rag_optimization_pipeline(
     optimization_metric: str = "overall_score",
     optimization_max_rag_patterns: int = 8,
     preset: str = "speed",
+    do_ocr: bool = False,
+    ocr_lang: Optional[str] = None,
 ):
     """Automated system for building and optimizing Retrieval-Augmented Generation (RAG) applications.
 
@@ -107,6 +111,10 @@ def documents_rag_optimization_pipeline(
             no table structure parsing, and no contextual enrichment. "balanced"
             enables Docling table layout parsing, hybrid chunking, and LLM
             contextual enrichment. Both presets use the same resource tier.
+        do_ocr: Run RapidOCR during text extraction for scanned PDFs and images. Off by
+            default, since born-digital documents already carry a text layer.
+        ocr_lang: RapidOCR language, e.g. "english" or "chinese". None uses ai4rag's
+            default ("english"). Ignored when ``do_ocr`` is False.
     """
     component_stage_map_task = publish_component_stage_map(
         pipeline_id=PIPELINE_NAME,
@@ -145,6 +153,8 @@ def documents_rag_optimization_pipeline(
     text_extraction_task = text_extraction(
         documents_descriptor=documents_discovery_task.outputs["discovered_documents"],
         preset=preset,
+        do_ocr=do_ocr,
+        ocr_lang=ocr_lang,
     )
     text_extraction_task.after(search_space_preparation_task)
 
