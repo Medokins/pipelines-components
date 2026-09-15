@@ -32,8 +32,6 @@ def documents_indexing_pipeline(
     chunk_size: int = 1024,
     chunk_overlap: int = 0,
     batch_size: int = 20,
-    do_ocr: bool = False,
-    ocr_lang: Optional[str] = None,
 ):
     """Build a production vector index from documents for AutoRAG.
 
@@ -62,10 +60,6 @@ def documents_indexing_pipeline(
         chunk_overlap: Token overlap between consecutive chunks (recursive method only).
         batch_size: Number of documents per batch. Defaults to ``20``; ``0`` processes all
             documents in a single batch.
-        do_ocr: Run RapidOCR during text extraction for scanned PDFs and images. Off by
-            default, since born-digital documents already carry a text layer.
-        ocr_lang: RapidOCR language, e.g. "english" or "chinese". None uses ai4rag's
-            default ("english"). Ignored when ``do_ocr`` is False.
     """
     documents_discovery_task = documents_discovery(
         input_data_bucket_name=input_data_bucket_name,
@@ -78,8 +72,6 @@ def documents_indexing_pipeline(
 
     text_extraction_task = text_extraction(
         documents_descriptor=documents_discovery_task.outputs["discovered_documents"],
-        do_ocr=do_ocr,
-        ocr_lang=ocr_lang,
     )
     text_extraction_task.set_caching_options(False)
     text_extraction_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(

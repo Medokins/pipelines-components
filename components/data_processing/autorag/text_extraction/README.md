@@ -8,6 +8,9 @@ Text Extraction component.
 
 Thin wrapper that delegates to ``ai4rag.utils.data.text_extraction.extract_text``.
 
+OCR is always enabled. Docling only runs RapidOCR on pages it flags as needing it, so born-digital documents are unaffected, and scanned or image-only documents no longer extract as empty. This requires the RapidOCR models under ``$DOCLING_ARTIFACTS_PATH/RapidOcr/``, which the AutoRAG image bakes
+in; ai4rag raises ``FileNotFoundError`` when they are absent.
+
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
@@ -19,12 +22,6 @@ Thin wrapper that delegates to ``ai4rag.utils.data.text_extraction.extract_text`
 | `error_tolerance` | `Optional[float]` | `None` | Fraction of documents (0.0-1.0) allowed to fail without raising an error. None (the default) means zero tolerance. |
 | `max_extraction_workers` | `Optional[int]` | `None` | Number of parallel worker processes used for text extraction. Defaults to 4. Set to None to use all available CPU cores. |
 | `preset` | `str` | `speed` | Pipeline quality tier. "speed" (default) disables Docling table structure parsing. "balanced" enables TableFormer table reconstruction. |
-| `do_ocr` | `bool` | `False` | Run RapidOCR on pages Docling flags as needing it (scanned PDFs, images). Off by default: born-digital documents already carry a text layer, so OCR only adds runtime cost. Requires the RapidOCR models to be present under ``$DOCLING_ARTIFACTS_PATH/RapidOcr/``; ai4rag raises ``FileNotFoundError`` when they are missing. |
-| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language selection, e.g. "english" or "chinese". There is no auto-detection. Latin-script languages resolve to the English model bundle; only Chinese switches bundles. None uses ai4rag's default ("english"). Ignored when ``do_ocr`` is False. |
-| `ocr_det_model_path` | `Optional[str]` | `None` | Optional path to a custom RapidOCR text-detection ONNX model, overriding the bundle selected by ``ocr_lang``. |
-| `ocr_cls_model_path` | `Optional[str]` | `None` | Optional path to a custom RapidOCR angle-classification ONNX model. |
-| `ocr_rec_model_path` | `Optional[str]` | `None` | Optional path to a custom RapidOCR text-recognition ONNX model. |
-| `ocr_rec_keys_path` | `Optional[str]` | `None` | Optional path to the character-keys dictionary matching a custom recognition model. Required when that model uses a non-default character set. |
 
 ## Usage Examples 🧪
 

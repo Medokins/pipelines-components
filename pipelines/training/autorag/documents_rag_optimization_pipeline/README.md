@@ -29,8 +29,6 @@ deployment settings), executable notebooks, and evaluation results.
 | `optimization_metric` | `str` | `overall_score` | Quality metric used to rank RAG patterns. Use an evaluator-qualified value such as ``"unitxt:faithfulness"``, ``"ragas:context_precision"``, or ``"custom:overall_score"`` (default). The ``speed`` preset supports Unitxt and custom metrics; ``balanced`` also supports RAGAS metrics. ``custom:overall_score`` aggregates Unitxt outputs for ``speed`` and Unitxt plus RAGAS outputs for ``balanced``. |
 | `optimization_max_rag_patterns` | `int` | `8` | Maximum number of RAG patterns to generate. Passed to ai4rag (max_number_of_rag_patterns). Defaults to 8. |
 | `preset` | `str` | `speed` | Pipeline quality tier. "speed" (default) uses recursive chunking, no table structure parsing, and no contextual enrichment. "balanced" enables Docling table layout parsing, hybrid chunking, and LLM contextual enrichment. Both presets use the same resource tier. |
-| `do_ocr` | `bool` | `False` | Run RapidOCR during text extraction for scanned PDFs and images. Off by default, since born-digital documents already carry a text layer. |
-| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language, e.g. "english" or "chinese". None uses ai4rag's default ("english"). Ignored when ``do_ocr`` is False. |
 
 ## Metadata 🗂️
 

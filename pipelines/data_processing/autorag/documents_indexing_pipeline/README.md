@@ -24,8 +24,6 @@ Discovers documents from object storage, extracts text, and indexes chunks into 
 | `chunk_size` | `int` | `1024` | Maximum chunk size in tokens (128--2048). |
 | `chunk_overlap` | `int` | `0` | Token overlap between consecutive chunks (recursive method only). |
 | `batch_size` | `int` | `20` | Number of documents per batch. Defaults to ``20``; ``0`` processes all documents in a single batch. |
-| `do_ocr` | `bool` | `False` | Run RapidOCR during text extraction for scanned PDFs and images. Off by default, since born-digital documents already carry a text layer. |
-| `ocr_lang` | `Optional[str]` | `None` | RapidOCR language, e.g. "english" or "chinese". None uses ai4rag's default ("english"). Ignored when ``do_ocr`` is False. |
 
 ## Metadata 🗂️
 
