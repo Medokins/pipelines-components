@@ -21,6 +21,7 @@ def autogluon_timeseries_models_training(
     models_artifact: dsl.Output[dsl.Model],
     extra_train_data_path: str,
     html_artifact: dsl.Output[dsl.HTML],
+    experiment_notebook: dsl.Output[dsl.Artifact],
     component_status: dsl.Output[dsl.Artifact],
     uses_synthetic_id: bool = False,
     sample_rows: str = "[]",
@@ -35,6 +36,11 @@ def autogluon_timeseries_models_training(
     register_best_model: bool = False,
     model_registry_name: str = "",
     target_stage: str = "",
+    test_data_bucket_name: str = "",
+    test_data_file_key: str = "",
+    train_data_secret_name: str = "",
+    train_data_bucket_name: str = "",
+    train_data_file_key: str = "",
 ) -> NamedTuple(
     "outputs",
     top_models=List[str],
@@ -63,9 +69,13 @@ def autogluon_timeseries_models_training(
         workspace_path: Workspace directory where predictor will be saved.
         pipeline_name: Pipeline name used in generated notebook placeholders.
         run_id: Pipeline run id used in generated notebook placeholders.
+        train_data_secret_name: Kubernetes secret name for S3 credentials used by the pipeline.
+        train_data_bucket_name: S3 bucket containing the training dataset.
+        train_data_file_key: S3 object key for the training dataset.
         models_artifact: Combined output artifact containing all refitted models.
         extra_train_data_path: Path to extra train split for full refit.
         html_artifact: Output HTML artifact containing the ranked leaderboard page.
+        experiment_notebook: Output artifact containing the run-level experiment launcher notebook.
         component_status: Output artifact containing stage-level progress tracking for this component.
         uses_synthetic_id: True if the loader injected a synthetic ID column for two-column datasets.
         sample_rows: Sample rows JSON string used in generated notebook placeholders.
@@ -87,6 +97,8 @@ def autogluon_timeseries_models_training(
         model_registry_name: Registered-model name to use when ``register_best_model`` is True.
         target_stage: Optional deployment-stage value set as a ``target_stage`` tag on the
             registered best-model version.
+        test_data_bucket_name: Optional S3 bucket for user-provided external test data.
+        test_data_file_key: Optional S3 object key for user-provided external test data.
 
     MLflow logging:
         When the platform injects ``KFP_MLFLOW_CONFIG``, results are logged to MLflow
@@ -725,6 +737,39 @@ def autogluon_timeseries_models_training(
                 "completed",
                 metrics={"best_model": best_model_name, "model_count": n},
             )
+
+            # Generate the run-level experiment launcher notebook. Best-effort.
+            from kfp_components.components.training.automl.shared.experiment_notebook_utils import (
+                TimeseriesExperimentNotebookConfig,
+                timeseries_experiment_notebook_replacements,
+                write_experiment_notebook,
+            )
+
+            try:
+                experiment_notebook_config = TimeseriesExperimentNotebookConfig(
+                    train_data_secret_name=train_data_secret_name,
+                    train_data_bucket_name=train_data_bucket_name,
+                    train_data_file_key=train_data_file_key,
+                    test_data_bucket_name=test_data_bucket_name,
+                    test_data_file_key=test_data_file_key,
+                    target=target,
+                    id_column=id_column,
+                    timestamp_column=timestamp_column,
+                    known_covariates_names=known_covariates_names,
+                    prediction_length=prediction_length,
+                    top_n=top_n,
+                    eval_metric=eval_metric,
+                    preset=preset,
+                )
+                write_experiment_notebook(
+                    output_dir=Path(experiment_notebook.path),
+                    kind="timeseries",
+                    include_user_test_data=experiment_notebook_config.include_user_test_data,
+                    replacements=timeseries_experiment_notebook_replacements(experiment_notebook_config),
+                )
+                experiment_notebook.metadata["display_name"] = "automl_experiment_notebook"
+            except Exception as notebook_exc:
+                logger.warning("Could not generate experiment notebook: %s", notebook_exc)
 
             # Log parent aggregates + leaderboard and (optionally) register the best model, then
             # close the MLflow parent run. Best-effort: never fails the training step.

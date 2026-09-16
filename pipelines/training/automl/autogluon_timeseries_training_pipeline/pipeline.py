@@ -77,8 +77,9 @@ def autogluon_timeseries_training_pipeline(
     0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP
        artifact for dashboards before data loading.
 
-    1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MB),
-       replaces ``+/-inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps
+    1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MiB
+       for the "speed" preset, up to 1 GiB for "balanced"), replaces ``+/-inf`` with NaN (missing
+       targets stay for AutoGluon), requires parseable timestamps
        and non-null ids (or injects ``__synthetic_item_id`` for two-column datasets when ``id_column=""``),
        deduplicates ``(id_column, timestamp_column)``, then applies a two-stage
        **per-series temporal** split on ``id_column`` / ``timestamp_column``:
@@ -175,6 +176,7 @@ def autogluon_timeseries_training_pipeline(
         known_covariates_names=known_covariates_names,
         test_data_bucket_name=test_data_bucket_name,
         test_data_file_key=test_data_file_key,
+        preset=preset,
     )
     data_loader_task.after(component_stage_map_task)
     data_loader_task.set_caching_options(False)
@@ -211,6 +213,9 @@ def autogluon_timeseries_training_pipeline(
         pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
         run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
         run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+        train_data_secret_name=train_data_secret_name,
+        train_data_bucket_name=train_data_bucket_name,
+        train_data_file_key=train_data_file_key,
         uses_synthetic_id=data_loader_task.outputs["uses_synthetic_id"],
         sample_rows=data_loader_task.outputs["sample_rows"],
         sampling_config=data_loader_task.outputs["sample_config"],
@@ -221,6 +226,8 @@ def autogluon_timeseries_training_pipeline(
         register_best_model=register_best_model,
         model_registry_name=model_registry_name,
         target_stage=target_stage,
+        test_data_bucket_name=test_data_bucket_name,
+        test_data_file_key=test_data_file_key,
     )
 
     with dsl.If(preset == "balanced"):

@@ -27,6 +27,7 @@ mutates predictor state. All artifacts are written under a single output artifac
 | `sample_row` | `str` | `None` | JSON array of row dicts for the notebook example input; label column is stripped. |
 | `models_artifact` | `dsl.Output[dsl.Model]` | `None` | Output Model artifact containing all refitted model subdirectories. |
 | `html_artifact` | `dsl.Output[dsl.HTML]` | `None` | Output HTML artifact containing the ranked leaderboard page. |
+| `experiment_notebook` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing the run-level experiment launcher notebook. |
 | `component_status` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing stage-level progress tracking for this component. |
 | `sampling_config` | `Optional[dict]` | `None` | Data sampling config stored in artifact metadata. |
 | `split_config` | `Optional[dict]` | `None` | Data split config stored in artifact metadata. |
@@ -39,6 +40,11 @@ mutates predictor state. All artifacts are written under a single output artifac
 | `register_best_model` | `bool` | `False` | When True, register the best model in the MLflow Model Registry (requires ``model_registry_name``). |
 | `model_registry_name` | `str` | `""` | Registered-model name to use when ``register_best_model`` is True. |
 | `target_stage` | `str` | `""` | Optional deployment-stage value set as a ``target_stage`` tag on the registered best-model version. |
+| `test_data_bucket_name` | `str` | `""` | Optional S3 bucket for user-provided external test data. |
+| `test_data_file_key` | `str` | `""` | Optional S3 object key for user-provided external test data. |
+| `train_data_secret_name` | `str` | `""` | Kubernetes secret name for S3 credentials used by the pipeline. |
+| `train_data_bucket_name` | `str` | `""` | S3 bucket containing the training dataset. |
+| `train_data_file_key` | `str` | `""` | S3 object key for the training dataset. |
 
 ## Outputs 📤
 
