@@ -8,8 +8,8 @@ Text Extraction component.
 
 Thin wrapper that delegates to ``ai4rag.utils.data.text_extraction.extract_text``.
 
-OCR is always enabled. Docling only runs RapidOCR on pages it flags as needing it, so born-digital documents are unaffected, and scanned or image-only documents no longer extract as empty. This requires the RapidOCR models under ``$DOCLING_ARTIFACTS_PATH/RapidOcr/``, which the AutoRAG image bakes
-in; ai4rag raises ``FileNotFoundError`` when they are absent.
+OCR is always enabled. Docling runs RapidOCR only on pages it flags as needing it, so pages carrying a text layer are read directly and scanned or image-only pages are OCR'd. Requires the RapidOCR models under ``$DOCLING_ARTIFACTS_PATH/RapidOcr/``, which the AutoRAG image provides; ai4rag raises
+``FileNotFoundError`` when they are absent. Latin-script languages use the English model bundle.
 
 ## Inputs 📥
 
