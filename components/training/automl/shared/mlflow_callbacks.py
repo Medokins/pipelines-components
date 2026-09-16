@@ -11,8 +11,9 @@ The end-of-run refit loop (in
 :class:`~kfp_components.components.training.automl.shared.mlflow_tracking.MlflowExperimentLogger`)
 then *enriches* -- rather than duplicates -- these runs: it reuses the child run created
 here (matched by model name via a shared ``registry``) and adds the authoritative test
-metrics and artifacts. Models that were never selected for refit keep their live
-validation-only run, so the search history stays visible.
+metrics and artifacts. Once the top-N are selected, the refit loop calls
+``prune_live_child_runs`` to delete the live child runs of candidates that did not make the
+cut, so only the refit-and-enriched top-N models remain under the parent.
 
 ``TimeSeriesPredictor`` has no equivalent callback system, so this module is used only by
 the tabular training component.

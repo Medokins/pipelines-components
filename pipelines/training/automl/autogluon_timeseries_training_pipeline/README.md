@@ -17,6 +17,11 @@ Storage strategy:
 Train and test CSV splits are produced on the PVC workspace (``PipelineConfig.workspace``) so steps can read shared paths without re-downloading. The per-series test split is also exposed as a dataset artifact. S3 credentials for the initial load are supplied via the Kubernetes secret
 ``train_data_secret_name``.
 
+MLflow logging:
+
+Results are logged to MLflow only when the platform injects ``KFP_MLFLOW_CONFIG`` into the step (configured on the Data Science Pipelines / KFP pipeline server, not via a pipeline parameter). To disable MLflow logging, run the pipeline on a server without MLflow configured, or have the cluster admin
+remove the MLflow configuration from the pipeline server; the training step then skips all tracking and runs unchanged. Artifact uploads can additionally be turned off per run with ``log_model_artifacts=False``.
+
 Pipeline stages:
 
 0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP artifact for dashboards before data loading.
@@ -43,6 +48,7 @@ to a single combined ``models_artifact``.
 | `top_n` | `int` | `3` | Number of top models to select for the leaderboard and output (default: 3). |
 | `eval_metric` | `str` | `mean_absolute_scaled_error` | Metric for model ranking in snake_case (e.g. ``"mean_absolute_scaled_error"``, ``"weighted_quantile_loss"``) or legacy uppercase acronym form. Defaults to ``"mean_absolute_scaled_error"``. |
 | `preset` | `str` | `speed` | Training quality tier. ``"speed"`` (default, 4 vCPU / 16 GiB) or ``"balanced"`` (may run more than 2x longer, 8 vCPU / 32 GiB). |
+| `log_model_artifacts` | `bool` | `True` | When True (default), upload each model's predictor and inference notebook to its MLflow child run. Set False to skip potentially large predictor uploads (metrics and tags are still logged). |
 | `register_best_model` | `bool` | `False` | When True, register the best model in the MLflow Model Registry (requires model_registry_name). |
 | `model_registry_name` | `str` | `""` | Registered-model name to use when register_best_model is True. |
 | `target_stage` | `str` | `""` | Optional deployment-stage value set as a ``target_stage`` tag on the registered best-model version. |

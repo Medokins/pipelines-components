@@ -42,6 +42,7 @@ def autogluon_tabular_training_pipeline(
     positive_class: str = "",
     eval_metric: str = "",
     preset: str = "speed",
+    log_model_artifacts: bool = True,
     register_best_model: bool = False,
     model_registry_name: str = "",
     target_stage: str = "",
@@ -64,6 +65,15 @@ def autogluon_tabular_training_pipeline(
     pipeline steps sharing the workspace can access them without extra downloads. Only
     the test dataset is written to an S3 artifact (for use by the leaderboard evaluation
     component). The workspace is provisioned via ``PipelineConfig.workspace``.
+
+    **MLflow logging:**
+
+    Results are logged to MLflow only when the platform injects ``KFP_MLFLOW_CONFIG`` into the
+    step (configured on the Data Science Pipelines / KFP pipeline server, not via a pipeline
+    parameter). To disable MLflow logging, run the pipeline on a server without MLflow
+    configured, or have the cluster admin remove the MLflow configuration from the pipeline
+    server; the training step then skips all tracking and runs unchanged. Artifact uploads can
+    additionally be turned off per run with ``log_model_artifacts=False``.
 
     **Pipeline Stages:**
 
@@ -130,6 +140,7 @@ def autogluon_tabular_training_pipeline(
         positive_class: Optional label value for the positive class in binary classification. Defaults to the second unique class after sorting label values.
         eval_metric: Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification.
         preset: Training quality tier. "speed" (default, 4 vCPU / 16 GiB) or "balanced" (may run more than 2x longer, 8 vCPU / 32 GiB).
+        log_model_artifacts: When True (default), upload each model's predictor and inference notebook to its MLflow child run. Set False to skip potentially large predictor uploads (metrics and tags are still logged).
         register_best_model: When True, register the best model in the MLflow Model Registry (requires model_registry_name).
         model_registry_name: Registered-model name to use when register_best_model is True.
         target_stage: Optional deployment-stage value set as a "target_stage" tag on the registered best-model version.
@@ -224,6 +235,7 @@ def autogluon_tabular_training_pipeline(
         extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
         preset=preset,
         eval_metric=eval_metric,
+        log_model_artifacts=log_model_artifacts,
         register_best_model=register_best_model,
         model_registry_name=model_registry_name,
         target_stage=target_stage,

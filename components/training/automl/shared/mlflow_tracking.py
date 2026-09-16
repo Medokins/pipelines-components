@@ -215,6 +215,10 @@ def configure_mlflow_client(mlflow: Any, config: MlflowConfig) -> None:
     """Apply authentication, tracking URI, and workspace before MLflow API calls."""
     if config.auth_type == KUBERNETES_AUTH_TYPE:
         _apply_kubernetes_auth()
+    timeout_seconds = _parse_timeout_seconds(config.timeout)
+    if timeout_seconds is not None:
+        # MLflow reads MLFLOW_HTTP_REQUEST_TIMEOUT as a whole-second integer.
+        os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(timeout_seconds)
     mlflow.set_tracking_uri(config.tracking_uri)
     if config.workspace:
         _apply_workspace(mlflow, config.tracking_uri, config.workspace)
@@ -400,6 +404,51 @@ def _resolve_autogluon_version() -> str:
     except Exception:
         logger.debug("Could not import autogluon for version lookup", exc_info=True)
     return "unknown"
+
+
+def _resolve_kfp_version() -> str:
+    """Best-effort KFP SDK version for the parent run, or ``"unknown"``."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        for package in ("kfp", "kfp-server-api"):
+            try:
+                return version(package)
+            except PackageNotFoundError:
+                continue
+    except Exception:
+        logger.debug("Could not resolve kfp version from package metadata", exc_info=True)
+    return "unknown"
+
+
+def _resolve_image() -> str:
+    """Best-effort training container image reference for the parent run.
+
+    Reads ``AUTOML_IMAGE`` (the component ``base_image``) from the installed package so the
+    parent run records which image produced the models. Returns ``""`` when unavailable.
+    """
+    try:
+        from kfp_components.utils.consts import AUTOML_IMAGE  # pyright: ignore[reportMissingImports]
+
+        return str(AUTOML_IMAGE)
+    except Exception:
+        logger.debug("Could not resolve AUTOML_IMAGE for MLflow logging", exc_info=True)
+        return ""
+
+
+def _parse_timeout_seconds(timeout: str) -> int | None:
+    """Parse a platform timeout like ``"30s"`` / ``"30"`` into whole seconds, or ``None``."""
+    text = (timeout or "").strip().lower()
+    if not text:
+        return None
+    if text.endswith("s"):
+        text = text[:-1].strip()
+    try:
+        seconds = int(float(text))
+    except ValueError:
+        logger.debug("Could not parse MLflow timeout value %r; ignoring.", timeout)
+        return None
+    return seconds if seconds > 0 else None
 
 
 def _safe_log_artifact(mlflow: Any, file_path: Path, artifact_path: str) -> bool:
@@ -693,6 +742,7 @@ class MlflowExperimentLogger:
         preset: str = "",
         top_n: int = 0,
         data_config: dict[str, Any] | None = None,
+        dataset_uri: str = "",
     ) -> None:
         """Tag the parent run and log run-level params. Call once before ``log_model``."""
         if not self.enabled:
@@ -705,25 +755,35 @@ class MlflowExperimentLogger:
             self._plot_renderer = _load_plot_renderer()
             self._tmp_dir = Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
             autogluon_version = _resolve_autogluon_version()
+            kfp_version = _resolve_kfp_version()
+            image = _resolve_image()
 
             self._mlflow.set_tags(
                 {
                     "pipeline_name": pipeline_name,
                     "kfp_run_id": kfp_run_id,
                     "kfp_run_name": kfp_run_name,
-                    "task_type": self._task_type,
                     "autogluon_version": autogluon_version,
+                    "kfp_version": kfp_version,
+                    "image": image,
                     "run_type": RUN_TYPE_PIPELINE,
                 }
             )
+            # task_type is a run parameter (per the MLflow integration ADR), not a tag.
             parent_params: dict[str, Any] = {
+                "task_type": self._task_type,
                 "eval_metric": self._eval_metric,
                 "autogluon_version": autogluon_version,
+                "kfp_version": kfp_version,
+                "image": image,
             }
             if preset:
                 parent_params["preset"] = preset
             if top_n:
                 parent_params["top_n"] = top_n
+            if dataset_uri:
+                # Non-secret dataset identity (s3://bucket/key); credentials live in the K8s secret.
+                parent_params["dataset_uri"] = dataset_uri
             if data_config:
                 parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
             self._mlflow.log_params(_stringify_params(parent_params))
@@ -889,12 +949,15 @@ class MlflowExperimentLogger:
         register_best_model: bool = False,
         model_registry_name: str = "",
         target_stage: str = "",
+        total_fit_time_seconds: float | None = None,
     ) -> None:
         """Log parent aggregates, the leaderboard, and (optionally) register the best model."""
         if not self.enabled:
             return
         try:
             tmp_dir = self._tmp_dir or Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
+            if total_fit_time_seconds is not None:
+                self._mlflow.log_metric("total_fit_time_seconds", float(total_fit_time_seconds))
             scores = _aggregate_scores(self._valid_metrics, self._eval_metric)
             if scores:
                 self._mlflow.log_metric("best_score", max(scores))

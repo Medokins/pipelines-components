@@ -121,6 +121,7 @@ def autogluon_models_training(
     import math
     import shutil
     import tempfile
+    import time
     from concurrent.futures import ThreadPoolExecutor
     from pathlib import Path
     from typing import (
@@ -290,6 +291,8 @@ def autogluon_models_training(
                     run_name=effective_run_name,
                 )
             )
+            # Non-secret dataset identity for the parent run; credentials stay in the K8s secret.
+            dataset_uri = f"s3://{train_data_bucket_name}/{train_data_file_key}" if train_data_bucket_name else ""
             run_logger.log_header(
                 pipeline_name=pipeline_name,
                 kfp_run_id=run_id,
@@ -297,11 +300,14 @@ def autogluon_models_training(
                 preset=preset,
                 top_n=top_n,
                 data_config={"sampling_config": sampling_config, "split_config": split_config},
+                dataset_uri=dataset_uri,
             )
             progress_callback = run_logger.build_progress_callback()
 
             status.record("model_selection", "started")
             time_limit = PRESET_TIME_LIMITS[preset]
+            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
+            train_start_time = time.perf_counter()
             predictor = TabularPredictor(**predictor_init_kwargs).fit(
                 train_data=train_data_df,
                 presets=PRESET_AG_NAMES[preset],
@@ -803,14 +809,24 @@ def autogluon_models_training(
 
                 # Log this model to MLflow as a nested child run as soon as it is finalized, so
                 # the experiment updates live. Kept sequential (out of the ThreadPoolExecutor
-                # above) because the MLflow fluent API is not thread-safe.
-                run_logger.log_model(
-                    model_name=model_name_full,
-                    model_dir=Path(models_artifact.path) / model_name_full,
-                    model_uri=f"{models_artifact.uri.rstrip('/')}/{model_name_full}",
-                    metrics={"test_data": eval_results},
-                    notebook_path=_render_sanitized_notebook(model_name_full) if run_logger.enabled else None,
-                )
+                # above) because the MLflow fluent API is not thread-safe. Best-effort: notebook
+                # rendering and child-run logging must never fail the training step.
+                try:
+                    sanitized_notebook_path = (
+                        _render_sanitized_notebook(model_name_full) if run_logger.enabled else None
+                    )
+                    run_logger.log_model(
+                        model_name=model_name_full,
+                        model_dir=Path(models_artifact.path) / model_name_full,
+                        model_uri=f"{models_artifact.uri.rstrip('/')}/{model_name_full}",
+                        metrics={"test_data": eval_results},
+                        notebook_path=sanitized_notebook_path,
+                    )
+                except Exception:
+                    logger.exception("MLflow logging failed for model %s; continuing.", model_name_full)
+
+            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
+            total_fit_time_seconds = time.perf_counter() - train_start_time
 
             shutil.rmtree(mlflow_notebook_dir, ignore_errors=True)
 
@@ -928,6 +944,7 @@ def autogluon_models_training(
                 register_best_model=register_best_model,
                 model_registry_name=model_registry_name,
                 target_stage=target_stage,
+                total_fit_time_seconds=total_fit_time_seconds,
             )
             logged_to_mlflow, mlflow_tracking_info = run_logger.result()
             mlflow_stack.close()

@@ -226,6 +226,23 @@ class TestMlflowTrackingHelpers:
 
         assert "MLFLOW_TRACKING_TOKEN" not in os.environ
 
+    def test_configure_applies_request_timeout(self, monkeypatch):
+        """Translate the platform ``timeout`` (e.g. "30s") into MLFLOW_HTTP_REQUEST_TIMEOUT seconds."""
+        monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+        mlflow = mock.Mock(spec=["set_tracking_uri"])
+        config = MlflowConfig(mode="kfp", tracking_uri="https://mlflow.example.com", timeout="30s")
+        configure_mlflow_client(mlflow, config)
+        assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "30"
+
+    def test_configure_skips_timeout_when_absent_or_invalid(self, monkeypatch):
+        """Leave MLFLOW_HTTP_REQUEST_TIMEOUT unset for empty or unparseable timeouts."""
+        monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+        mlflow = mock.Mock(spec=["set_tracking_uri"])
+        for bad in ("", "  ", "abc"):
+            config = MlflowConfig(mode="kfp", tracking_uri="https://mlflow.example.com", timeout=bad)
+            configure_mlflow_client(mlflow, config)
+            assert "MLFLOW_HTTP_REQUEST_TIMEOUT" not in os.environ
+
     @pytest.mark.parametrize(
         ("model_name", "expected_type", "expected_level"),
         [
@@ -322,6 +339,7 @@ def _run_logger_lifecycle(
     model_registry_name: str = "",
     target_stage: str = "",
     notebook_path: Path | None = None,
+    total_fit_time_seconds: float | None = None,
 ):
     """Drive a full ``experiment_run_logger`` lifecycle and return ``result()``."""
     metrics_by_model = metrics_by_model or {name: {"accuracy": 0.9} for name in model_names}
@@ -353,6 +371,7 @@ def _run_logger_lifecycle(
                 register_best_model=register_best_model,
                 model_registry_name=model_registry_name,
                 target_stage=target_stage,
+                total_fit_time_seconds=total_fit_time_seconds,
             )
     return run_logger.result()
 
@@ -708,3 +727,87 @@ class TestMlflowExperimentLogger:
 
         assert logged is False
         assert tracking_info == {}
+
+
+class TestParentRunAdrFields:
+    """The parent run records the ADR-required identity/metadata fields."""
+
+    def _log_header(self, monkeypatch, *, dataset_uri="") -> mock.MagicMock:
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+        parent_ctx = _mock_run_context("parent-run", "1")
+        mock_mlflow = mock.MagicMock()
+        mock_mlflow.start_run.return_value = parent_ctx
+        mock_mlflow.active_run.return_value = parent_ctx
+        with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
+            with experiment_run_logger(task_type="binary", eval_metric="accuracy") as run_logger:
+                run_logger.log_header(
+                    pipeline_name="p",
+                    kfp_run_id="run-1",
+                    preset="speed",
+                    top_n=3,
+                    dataset_uri=dataset_uri,
+                )
+        return mock_mlflow
+
+    def test_task_type_is_a_param_not_a_tag(self, monkeypatch):
+        """ADR: task_type is a run parameter, not a tag."""
+        mock_mlflow = self._log_header(monkeypatch)
+        tags = mock_mlflow.set_tags.call_args.args[0]
+        params = mock_mlflow.log_params.call_args.args[0]
+        assert "task_type" not in tags
+        assert params["task_type"] == "binary"
+
+    def test_kfp_version_and_image_logged(self, monkeypatch):
+        """ADR: kfp_version and image are recorded on the parent run."""
+        mock_mlflow = self._log_header(monkeypatch)
+        tags = mock_mlflow.set_tags.call_args.args[0]
+        params = mock_mlflow.log_params.call_args.args[0]
+        for key in ("kfp_version", "image"):
+            assert key in tags
+            assert key in params
+
+    def test_dataset_uri_logged_when_provided(self, monkeypatch):
+        """ADR: the non-secret dataset URI is recorded when available."""
+        mock_mlflow = self._log_header(monkeypatch, dataset_uri="s3://bucket/data.csv")
+        params = mock_mlflow.log_params.call_args.args[0]
+        assert params["dataset_uri"] == "s3://bucket/data.csv"
+
+    def test_dataset_uri_omitted_when_empty(self, monkeypatch):
+        """No dataset_uri param when the caller has no bucket/key."""
+        mock_mlflow = self._log_header(monkeypatch, dataset_uri="")
+        params = mock_mlflow.log_params.call_args.args[0]
+        assert "dataset_uri" not in params
+
+    def test_total_fit_time_logged_as_parent_metric(self, tmp_path, monkeypatch):
+        """ADR: finalize logs total_fit_time_seconds as a parent metric."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.9})
+        mock_mlflow = _make_mock_mlflow(
+            _mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")]
+        )
+        _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.9}},
+            total_fit_time_seconds=12.5,
+        )
+        assert mock.call("total_fit_time_seconds", 12.5) in mock_mlflow.log_metric.call_args_list
+
+    def test_total_fit_time_omitted_when_none(self, tmp_path, monkeypatch):
+        """No total_fit_time_seconds metric when the caller did not measure it."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.9})
+        mock_mlflow = _make_mock_mlflow(
+            _mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")]
+        )
+        _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.9}},
+        )
+        logged_metric_names = [c.args[0] for c in mock_mlflow.log_metric.call_args_list]
+        assert "total_fit_time_seconds" not in logged_metric_names

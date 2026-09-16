@@ -116,6 +116,7 @@ def autogluon_timeseries_models_training(
     import math
     import shutil
     import tempfile
+    import time
     from pathlib import Path
 
     import pandas as pd
@@ -249,6 +250,8 @@ def autogluon_timeseries_models_training(
             prediction_length,
         )
         status.record("model_selection", "started")
+        # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
+        train_start_time = time.perf_counter()
         try:
             predictor.fit(
                 train_data=train_ts,
@@ -484,6 +487,8 @@ def autogluon_timeseries_models_training(
                     run_name=effective_run_name,
                 )
             )
+            # Non-secret dataset identity for the parent run; credentials stay in the K8s secret.
+            dataset_uri = f"s3://{train_data_bucket_name}/{train_data_file_key}" if train_data_bucket_name else ""
             run_logger.log_header(
                 pipeline_name=pipeline_name,
                 kfp_run_id=run_id,
@@ -491,6 +496,7 @@ def autogluon_timeseries_models_training(
                 preset=preset,
                 top_n=top_n,
                 data_config={"sampling_config": sampling_config, "split_config": split_config},
+                dataset_uri=dataset_uri,
             )
 
             for model_name in top_models:
@@ -655,6 +661,9 @@ def autogluon_timeseries_models_training(
 
             shutil.rmtree(mlflow_notebook_dir, ignore_errors=True)
 
+            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
+            total_fit_time_seconds = time.perf_counter() - train_start_time
+
             # Report partial failures
             if failed_models:
                 logger.warning("The following models failed refit: %s", failed_models)
@@ -780,6 +789,7 @@ def autogluon_timeseries_models_training(
                 register_best_model=register_best_model,
                 model_registry_name=model_registry_name,
                 target_stage=target_stage,
+                total_fit_time_seconds=total_fit_time_seconds,
             )
             logged_to_mlflow, mlflow_tracking_info = run_logger.result()
             mlflow_stack.close()
