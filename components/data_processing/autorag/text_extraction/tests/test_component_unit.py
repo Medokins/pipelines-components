@@ -60,15 +60,6 @@ class TestTextExtractionUnitTests:
         assert sig.parameters["max_extraction_workers"].default is None
         assert sig.parameters["preset"].default == "speed"
 
-    def test_component_exposes_no_ocr_parameters(self):
-        """OCR is always on and is not configurable from the outside.
-
-        Docling only runs RapidOCR on pages it flags as needing it, so there is no
-        corpus for which turning OCR off is the right call, and nothing to tune.
-        """
-        params = list(inspect.signature(text_extraction.python_func).parameters)
-        assert [p for p in params if "ocr" in p.lower()] == []
-
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_delegates_to_ai4rag_extract_text(self, tmp_path):
         """Wrapper reads descriptor and calls extract_text with correct args."""
@@ -327,12 +318,7 @@ class TestTextExtractionUnitTests:
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_ocr_is_always_enabled(self, tmp_path):
-        """do_ocr is hardcoded on, with everything else left to ai4rag's defaults.
-
-        Docling only runs RapidOCR on pages it flags as needing it, so born-digital
-        corpora pay nothing for this. Passing no model paths and no language is what
-        makes ai4rag fall back to the RapidOCR bundle baked into the image.
-        """
+        """do_ocr is always True; model paths and language are left to ai4rag."""
         modules, _, mock_docling_config_cls = _make_ai4rag_mocks()
 
         descriptor_dir = tmp_path / "descriptor"

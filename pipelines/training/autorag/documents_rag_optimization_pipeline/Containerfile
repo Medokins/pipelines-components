@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Docling models for offline text extraction (RHAI OGX modelcar). Its /models/docling/models/
 # is already Docling's artifacts layout (docling-project--*/ plus RapidOcr/), so it is copied
-# wholesale. RapidOcr/ is what ai4rag requires for do_ocr: it resolves OCR models relative to
-# $DOCLING_ARTIFACTS_PATH/RapidOcr/ and raises FileNotFoundError when they are absent.
+# wholesale. ai4rag resolves OCR models relative to $DOCLING_ARTIFACTS_PATH/RapidOcr/ and
+# raises FileNotFoundError when they are absent.
 # Must match DOCLING_ARTIFACTS_PATH. Do not use /opt/docling-artifacts on aipcc: non-root RUN cannot mkdir there.
 ENV DOCLING_ARTIFACTS_PATH=/opt/app-root/docling-artifacts/models
 USER root
