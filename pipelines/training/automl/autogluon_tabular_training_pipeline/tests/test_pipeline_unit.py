@@ -55,9 +55,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
             "positive_class",
             "preset",
             "eval_metric",
-            "register_best_model",
-            "model_registry_name",
-            "target_stage",
+            "log_model_artifacts",
             "test_data_bucket_name",
             "test_data_file_key",
         }
@@ -67,9 +65,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
         assert inputs["top_n"].default == 3
         assert inputs["preset"].default == "speed"
         assert inputs["eval_metric"].default == ""
-        assert inputs["register_best_model"].default is False
-        assert inputs["model_registry_name"].default == ""
-        assert inputs["target_stage"].default == ""
+        assert inputs["log_model_artifacts"].default is True
         assert inputs["test_data_bucket_name"].default == ""
         assert inputs["test_data_file_key"].default == ""
 
@@ -204,8 +200,8 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
             allow_extra=True,
         )
 
-    def test_compiled_pipeline_wires_mlflow_registry_inputs_to_training(self):
-        """Registry inputs are forwarded into the training task.
+    def test_compiled_pipeline_wires_mlflow_inputs_to_training(self):
+        """MLflow inputs are forwarded into the training task.
 
         The training task now logs to MLflow; the standalone mlflow-logger step no longer exists.
         """
@@ -223,9 +219,7 @@ class TestAutogluonTabularTrainingPipelineUnitTests:
         assert "automl-mlflow-logger" not in content
         assert "exec-autogluon-models-training:" in content
         assert "exec-autogluon-models-training-2:" in content
-        assert "componentInputParameter: register_best_model" in content
-        assert "componentInputParameter: model_registry_name" in content
-        assert "componentInputParameter: target_stage" in content
+        assert "componentInputParameter: log_model_artifacts" in content
 
     def test_compiled_pipeline_data_loader_declares_task_type_and_label(self):
         """Tabular data loader component exposes task_type and label_column inputs."""

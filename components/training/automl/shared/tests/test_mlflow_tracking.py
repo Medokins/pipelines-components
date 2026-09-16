@@ -335,9 +335,6 @@ def _run_logger_lifecycle(
     eval_metric: str = "accuracy",
     metrics_by_model: dict | None = None,
     log_model_artifacts: bool = False,
-    register_best_model: bool = False,
-    model_registry_name: str = "",
-    target_stage: str = "",
     notebook_path: Path | None = None,
     total_fit_time_seconds: float | None = None,
 ):
@@ -368,9 +365,6 @@ def _run_logger_lifecycle(
             run_logger.finalize(
                 html_artifact_path=html_path,
                 model_names=model_names,
-                register_best_model=register_best_model,
-                model_registry_name=model_registry_name,
-                target_stage=target_stage,
                 total_fit_time_seconds=total_fit_time_seconds,
             )
     return run_logger.result()
@@ -671,40 +665,6 @@ class TestMlflowExperimentLogger:
         assert not any(
             call.kwargs.get("artifact_path") == "notebooks" for call in mock_mlflow.log_artifact.call_args_list
         )
-
-    def test_registers_best_model_and_sets_target_stage(self, tmp_path, monkeypatch):
-        """Register the best model and tag its version with target_stage."""
-        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
-
-        model_name = "LightGBM_BAG_L1_FULL"
-        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
-
-        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")])
-        mock_mlflow.register_model.return_value = mock.Mock(version="3")
-        mock_client = mock.MagicMock()
-        mock_mlflow.MlflowClient.return_value = mock_client
-
-        logged, tracking_info = _run_logger_lifecycle(
-            mock_mlflow,
-            tmp_path=tmp_path,
-            model_names=[model_name],
-            metrics_by_model={model_name: {"accuracy": 0.91}},
-            register_best_model=True,
-            model_registry_name="my-model",
-            target_stage="staging",
-        )
-
-        assert logged is True
-        mock_mlflow.register_model.assert_called_once_with("runs:/child-run-1/model", "my-model")
-        mock_client.set_model_version_tag.assert_called_once_with(
-            name="my-model",
-            version="3",
-            key="target_stage",
-            value="staging",
-        )
-        assert tracking_info["mlflow_registered_model"] == "my-model"
-        assert tracking_info["mlflow_model_version"] == "3"
-        assert tracking_info["mlflow_target_stage"] == "staging"
 
     def test_disables_when_parent_run_open_fails(self, tmp_path, monkeypatch):
         """Disable tracking (no raise) when the parent run cannot be opened."""

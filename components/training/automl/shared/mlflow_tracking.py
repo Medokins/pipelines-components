@@ -51,9 +51,6 @@ RUN_TYPE_PIPELINE = "pipeline"
 RUN_TYPE_MODEL = "model"
 MLFLOW_PARENT_RUN_ID_TAG = "mlflow.parentRunId"
 
-# Tag key used to mark the deployment stage of a registered best-model version.
-TARGET_STAGE_TAG = "target_stage"
-
 # Relative locations inside each ``<model>_FULL`` directory of the models artifact.
 MODEL_PREDICTOR_SUBDIR = "predictor"
 MODEL_NOTEBOOK_RELPATH = "notebooks/automl_predictor_notebook.ipynb"
@@ -546,44 +543,6 @@ def _log_rendered_plots(
     return uploaded
 
 
-def _register_best_model(
-    mlflow: Any,
-    *,
-    best_child_run_id: str,
-    model_registry_name: str,
-    target_stage: str,
-) -> dict[str, str]:
-    """Register the best model's ``model`` artifacts and tag the version with target_stage."""
-    if not best_child_run_id or not model_registry_name:
-        return {}
-    model_uri = f"runs:/{best_child_run_id}/model"
-    try:
-        registered = mlflow.register_model(model_uri, model_registry_name)
-    except Exception as exc:
-        logger.exception("MLflow model registration failed for %s.", model_registry_name)
-        return {"mlflow_registry_error": str(exc)}
-
-    version = str(getattr(registered, "version", ""))
-    info: dict[str, str] = {
-        "mlflow_registered_model": model_registry_name,
-        "mlflow_model_version": version,
-    }
-    if target_stage:
-        try:
-            client = mlflow.MlflowClient()
-            client.set_model_version_tag(
-                name=model_registry_name,
-                version=version,
-                key=TARGET_STAGE_TAG,
-                value=target_stage,
-            )
-            info["mlflow_target_stage"] = target_stage
-        except Exception as exc:
-            logger.exception("Failed to set target_stage tag on %s v%s.", model_registry_name, version)
-            info["mlflow_registry_error"] = str(exc)
-    return info
-
-
 def _build_leaderboard_summary(
     *,
     model_names: list[str],
@@ -723,7 +682,6 @@ class MlflowExperimentLogger:
         self.parent_run_id = ""
         self.experiment_id = config.experiment_id if config else ""
         self._child_run_ids: list[str] = []
-        self._child_run_id_by_model: dict[str, str] = {}
         self._child_run_errors: list[str] = []
         # Populated live by the progress callback (model_name -> child run id) so the refit
         # loop enriches those runs instead of creating duplicate ones.
@@ -731,7 +689,6 @@ class MlflowExperimentLogger:
         self._valid_metrics: dict[str, dict[str, Any]] = {}
         self._plot_renderer: Any = None
         self._tmp_dir: Path | None = None
-        self._registry_info: dict[str, str] = {}
 
     def log_header(
         self,
@@ -936,7 +893,6 @@ class MlflowExperimentLogger:
                 if active_child is not None and active_child.info.run_id:
                     child_run_id = str(active_child.info.run_id)
                     self._child_run_ids.append(child_run_id)
-                    self._child_run_id_by_model[model_name] = child_run_id
         except Exception as exc:
             self._child_run_errors.append(f"{model_name}: {exc}")
             logger.exception("Failed to create MLflow child run for model %s.", model_name)
@@ -946,12 +902,9 @@ class MlflowExperimentLogger:
         *,
         html_artifact_path: str | Path,
         model_names: list[str],
-        register_best_model: bool = False,
-        model_registry_name: str = "",
-        target_stage: str = "",
         total_fit_time_seconds: float | None = None,
     ) -> None:
-        """Log parent aggregates, the leaderboard, and (optionally) register the best model."""
+        """Log parent aggregates and the leaderboard."""
         if not self.enabled:
             return
         try:
@@ -1001,30 +954,8 @@ class MlflowExperimentLogger:
                     ),
                 )
                 self._mlflow.log_param("best_model_name", best_model_name)
-                if register_best_model:
-                    self._register_best(best_model_name, model_registry_name, target_stage)
         except Exception:
             logger.exception("MLflow finalize step failed; continuing.")
-
-    def _register_best(self, best_model_name: str, model_registry_name: str, target_stage: str) -> None:
-        best_child_run_id = self._child_run_id_by_model.get(best_model_name, "")
-        if not best_child_run_id:
-            logger.warning(
-                "register_best_model requested but no child run for best model %s; skipping registration.",
-                best_model_name,
-            )
-            return
-        if not model_registry_name:
-            logger.warning("register_best_model requested but model_registry_name is empty; skipping.")
-            return
-        self._registry_info = _register_best_model(
-            self._mlflow,
-            best_child_run_id=best_child_run_id,
-            model_registry_name=model_registry_name,
-            target_stage=target_stage,
-        )
-        for key, value in self._registry_info.items():
-            self._mlflow.set_tag(key, value)
 
     def result(self) -> tuple[bool, dict[str, str]]:
         """Return ``(logged, tracking_info)`` for recording on the component status."""
@@ -1041,7 +972,6 @@ class MlflowExperimentLogger:
         run_url = build_mlflow_run_url(self._config.tracking_uri, self.experiment_id, run_id_for_url)
         if run_url:
             tracking_info["mlflow_run_url"] = run_url
-        tracking_info.update(self._registry_info)
         if self._child_run_errors:
             tracking_info["mlflow_child_run_errors"] = json.dumps(self._child_run_errors)
         return True, tracking_info

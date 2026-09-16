@@ -43,9 +43,6 @@ def autogluon_tabular_training_pipeline(
     eval_metric: str = "",
     preset: str = "speed",
     log_model_artifacts: bool = True,
-    register_best_model: bool = False,
-    model_registry_name: str = "",
-    target_stage: str = "",
     test_data_bucket_name: str = "",
     test_data_file_key: str = "",
 ):
@@ -141,9 +138,6 @@ def autogluon_tabular_training_pipeline(
         eval_metric: Metric used for model ranking. Empty string (default) is resolved by the component to "r2" for regression and "accuracy" for binary and multiclass classification.
         preset: Training quality tier. "speed" (default, 4 vCPU / 16 GiB) or "balanced" (may run more than 2x longer, 8 vCPU / 32 GiB).
         log_model_artifacts: When True (default), upload each model's predictor and inference notebook to its MLflow child run. Set False to skip potentially large predictor uploads (metrics and tags are still logged).
-        register_best_model: When True, register the best model in the MLflow Model Registry (requires model_registry_name).
-        model_registry_name: Registered-model name to use when register_best_model is True.
-        target_stage: Optional deployment-stage value set as a "target_stage" tag on the registered best-model version.
         test_data_bucket_name: Optional S3-compatible bucket name for a user-provided test dataset.
             Default: empty string (use the holdout split from training data).
         test_data_file_key: Optional S3 object key for a user-provided test CSV file.
@@ -236,9 +230,6 @@ def autogluon_tabular_training_pipeline(
         preset=preset,
         eval_metric=eval_metric,
         log_model_artifacts=log_model_artifacts,
-        register_best_model=register_best_model,
-        model_registry_name=model_registry_name,
-        target_stage=target_stage,
         test_data_bucket_name=test_data_bucket_name,
         test_data_file_key=test_data_file_key,
     )

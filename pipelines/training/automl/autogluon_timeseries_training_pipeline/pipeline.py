@@ -47,9 +47,6 @@ def autogluon_timeseries_training_pipeline(
     eval_metric: str = "mean_absolute_scaled_error",
     preset: str = "speed",
     log_model_artifacts: bool = True,
-    register_best_model: bool = False,
-    model_registry_name: str = "",
-    target_stage: str = "",
     test_data_bucket_name: str = "",
     test_data_file_key: str = "",
 ):
@@ -134,11 +131,6 @@ def autogluon_timeseries_training_pipeline(
         log_model_artifacts: When True (default), upload each model's predictor and inference
             notebook to its MLflow child run. Set False to skip potentially large predictor
             uploads (metrics and tags are still logged).
-        register_best_model: When True, register the best model in the MLflow Model Registry
-            (requires model_registry_name).
-        model_registry_name: Registered-model name to use when register_best_model is True.
-        target_stage: Optional deployment-stage value set as a ``target_stage`` tag on the
-            registered best-model version.
         test_data_bucket_name: Optional S3-compatible bucket name for a user-provided test dataset.
             Default: empty string (use the per-series holdout split from training data).
         test_data_file_key: Optional S3 object key for a user-provided test CSV file.
@@ -237,9 +229,6 @@ def autogluon_timeseries_training_pipeline(
         preset=preset,
         eval_metric=eval_metric,
         log_model_artifacts=log_model_artifacts,
-        register_best_model=register_best_model,
-        model_registry_name=model_registry_name,
-        target_stage=target_stage,
         test_data_bucket_name=test_data_bucket_name,
         test_data_file_key=test_data_file_key,
     )

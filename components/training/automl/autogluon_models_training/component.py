@@ -30,9 +30,6 @@ def autogluon_models_training(
     eval_metric: str = "",
     run_name: str = "",
     log_model_artifacts: bool = True,
-    register_best_model: bool = False,
-    model_registry_name: str = "",
-    target_stage: str = "",
     test_data_bucket_name: str = "",
     test_data_file_key: str = "",
     train_data_secret_name: str = "",
@@ -89,11 +86,6 @@ def autogluon_models_training(
             back to ``pipeline_name`` when empty.
         log_model_artifacts: When True, upload each model's predictor (model.pkl) and
             notebook to its MLflow child run.
-        register_best_model: When True, register the best model in the MLflow Model
-            Registry (requires ``model_registry_name``).
-        model_registry_name: Registered-model name to use when ``register_best_model`` is True.
-        target_stage: Optional deployment-stage value set as a ``target_stage`` tag on the
-            registered best-model version.
         test_data_bucket_name: Optional S3 bucket for user-provided external test data.
         test_data_file_key: Optional S3 object key for user-provided external test data.
 
@@ -172,8 +164,6 @@ def autogluon_models_training(
             f"eval_metric {eval_metric!r} is not valid for task_type={task_type!r}. "
             f"Valid options: {sorted(METRICS.get(task_type, {}))}."
         )
-    if register_best_model and not model_registry_name.strip():
-        raise ValueError("model_registry_name must be a non-empty string when register_best_model is True.")
 
     sampling_config = sampling_config or {}
     split_config = split_config or {}
@@ -935,15 +925,12 @@ def autogluon_models_training(
             except Exception as notebook_exc:
                 logger.warning("Could not generate experiment notebook: %s", notebook_exc)
 
-            # Log parent aggregates + leaderboard and (optionally) register the best model, then
-            # close the MLflow parent run. Best-effort: never fails the training step.
+            # Log parent aggregates + leaderboard, then close the MLflow parent run.
+            # Best-effort: never fails the training step.
             status.record("log_mlflow_results", "started")
             run_logger.finalize(
                 html_artifact_path=html_artifact.path,
                 model_names=model_names_full,
-                register_best_model=register_best_model,
-                model_registry_name=model_registry_name,
-                target_stage=target_stage,
                 total_fit_time_seconds=total_fit_time_seconds,
             )
             logged_to_mlflow, mlflow_tracking_info = run_logger.result()
