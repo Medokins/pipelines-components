@@ -755,9 +755,7 @@ class TestParentRunAdrFields:
         _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
         model_name = "LightGBM_BAG_L1_FULL"
         _write_model_metrics(tmp_path, model_name, {"accuracy": 0.9})
-        mock_mlflow = _make_mock_mlflow(
-            _mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")]
-        )
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")])
         _run_logger_lifecycle(
             mock_mlflow,
             tmp_path=tmp_path,
@@ -772,9 +770,7 @@ class TestParentRunAdrFields:
         _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
         model_name = "LightGBM_BAG_L1_FULL"
         _write_model_metrics(tmp_path, model_name, {"accuracy": 0.9})
-        mock_mlflow = _make_mock_mlflow(
-            _mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")]
-        )
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-run-1", "1")])
         _run_logger_lifecycle(
             mock_mlflow,
             tmp_path=tmp_path,
