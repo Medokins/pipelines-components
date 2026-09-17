@@ -102,6 +102,19 @@ def resolve_mlflow_config() -> MlflowConfig | None:
         logger.warning("%s has no 'endpoint'; MLflow logging disabled.", KFP_MLFLOW_CONFIG_ENV)
         return None
 
+    auth_type = str(data.get("authType", "")).strip()
+    # Kubernetes auth attaches a ServiceAccount bearer token to every request. Refuse to send it
+    # over a non-HTTPS endpoint, which would leak the token in cleartext (CWE-319). Disable
+    # tracking rather than risk the credential.
+    if auth_type == KUBERNETES_AUTH_TYPE and not tracking_uri.lower().startswith("https://"):
+        logger.warning(
+            "%s uses '%s' auth but 'endpoint' is not HTTPS; refusing to send bearer token over "
+            "cleartext. MLflow logging disabled.",
+            KFP_MLFLOW_CONFIG_ENV,
+            KUBERNETES_AUTH_TYPE,
+        )
+        return None
+
     # Only scope requests to a workspace when the server has workspaces enabled.
     workspace = str(data.get("workspace", "")).strip() if data.get("workspacesEnabled") else ""
     return MlflowConfig(
@@ -110,7 +123,7 @@ def resolve_mlflow_config() -> MlflowConfig | None:
         experiment_id=str(data.get("experimentId", "")).strip(),
         run_id=str(data.get("parentRunId", "")).strip(),
         workspace=workspace,
-        auth_type=str(data.get("authType", "")).strip(),
+        auth_type=auth_type,
         timeout=str(data.get("timeout", "")).strip(),
     )
 

@@ -296,8 +296,10 @@ def autogluon_models_training(
 
             status.record("model_selection", "started")
             time_limit = PRESET_TIME_LIMITS[preset]
-            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
-            train_start_time = time.perf_counter()
+            # Accumulates only the model-fitting call durations (selection fit + refit) for the
+            # parent metric, excluding selection, cloning, evaluation, notebook and logging overhead.
+            total_fit_time_seconds = 0.0
+            fit_start_time = time.perf_counter()
             predictor = TabularPredictor(**predictor_init_kwargs).fit(
                 train_data=train_data_df,
                 presets=PRESET_AG_NAMES[preset],
@@ -314,6 +316,7 @@ def autogluon_models_training(
                 # tracking is disabled or the callback API is unavailable.
                 callbacks=[progress_callback] if progress_callback else None,
             )
+            total_fit_time_seconds += time.perf_counter() - fit_start_time
 
             # Select top N models
             leaderboard = predictor.leaderboard(test_data_df)
@@ -372,7 +375,9 @@ def autogluon_models_training(
 
             # Refit all top models in a single call:  AutoGluon resolves stacking dependencies internally.
             status.record("refit_and_evaluate", "started")
+            refit_start_time = time.perf_counter()
             predictor_clone.refit_full(model=top_models, train_data_extra=extra_train_df)
+            total_fit_time_seconds += time.perf_counter() - refit_start_time
 
             def replace_placeholder_in_notebook(notebook, replacements):
                 for cell in notebook.get("cells", []):
@@ -814,9 +819,6 @@ def autogluon_models_training(
                     )
                 except Exception:
                     logger.exception("MLflow logging failed for model %s; continuing.", model_name_full)
-
-            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
-            total_fit_time_seconds = time.perf_counter() - train_start_time
 
             shutil.rmtree(mlflow_notebook_dir, ignore_errors=True)
 

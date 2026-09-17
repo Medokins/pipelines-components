@@ -240,8 +240,10 @@ def autogluon_timeseries_models_training(
             prediction_length,
         )
         status.record("model_selection", "started")
-        # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
-        train_start_time = time.perf_counter()
+        # Accumulates only the model-fitting call durations (selection fit + refit loop) for the
+        # parent metric, excluding leaderboard, evaluation, notebook and logging overhead.
+        total_fit_time_seconds = 0.0
+        fit_start_time = time.perf_counter()
         try:
             predictor.fit(
                 train_data=train_ts,
@@ -253,6 +255,7 @@ def autogluon_timeseries_models_training(
         except Exception as e:
             logger.error(f"Training failed: {str(e)}")
             raise ValueError(f"TimeSeriesPredictor training failed: {str(e)}") from e
+        total_fit_time_seconds += time.perf_counter() - fit_start_time
 
         try:
             leaderboard = predictor.leaderboard(test_ts)
@@ -510,12 +513,14 @@ def autogluon_timeseries_models_training(
                         known_covariates_names=known_covariates_names,
                     )
                     # fit() automatically saves the predictor to path specified in constructor
+                    refit_start_time = time.perf_counter()
                     predictor_refit.fit(
                         train_data=full_train_ts_df,
                         **additional_fit_params,
                         time_limit=time_limit,
                         excluded_model_types=["Chronos", "Chronos2", "Toto"],
                     )
+                    total_fit_time_seconds += time.perf_counter() - refit_start_time
                     metrics = predictor_refit.evaluate(test_ts, metrics=list(AVAILABLE_METRICS.keys()))
                     # Keep raw AutoGluon evaluate() signs for metrics.json (higher-is-better / negated errors)
                     # so Phase C leaderboard sorting (ascending=False) stays correct.
@@ -650,9 +655,6 @@ def autogluon_timeseries_models_training(
                     failed_models.append(model_name)
 
             shutil.rmtree(mlflow_notebook_dir, ignore_errors=True)
-
-            # Total model-fitting wall time (selection fit + refit loop) for the parent metric.
-            total_fit_time_seconds = time.perf_counter() - train_start_time
 
             # Report partial failures
             if failed_models:

@@ -110,6 +110,18 @@ class TestMlflowTrackingHelpers:
         assert config is not None
         assert config.workspace == ""
 
+    def test_resolve_mlflow_config_none_when_kubernetes_auth_over_http(self, monkeypatch):
+        """Disable tracking for kubernetes auth over cleartext HTTP (bearer-token leak, CWE-319)."""
+        _set_kfp_mlflow_config(monkeypatch, endpoint="http://mlflow.example.com", auth_type="kubernetes")
+        assert resolve_mlflow_config() is None
+
+    def test_resolve_mlflow_config_allows_non_kubernetes_auth_over_http(self, monkeypatch):
+        """Non-kubernetes auth sends no bearer token, so an HTTP endpoint is left enabled."""
+        _set_kfp_mlflow_config(monkeypatch, endpoint="http://mlflow.example.com", auth_type="")
+        config = resolve_mlflow_config()
+        assert config is not None
+        assert config.tracking_uri == "http://mlflow.example.com"
+
     def test_build_mlflow_run_url(self):
         """Build a deep-link URL for the MLflow UI."""
         url = build_mlflow_run_url("https://mlflow.example.com/", "5", "abc123")
@@ -275,10 +287,10 @@ class TestMlflowTrackingHelpers:
         assert _normalize_model_metrics(payload) == {"accuracy": 0.91, "f1": 0.88}
 
     def test_metrics_for_task_binary(self):
-        """Log all computed scalar metrics (incl. log_loss); drop redundant micro variants."""
+        """Log every computed scalar metric (incl. log_loss); non-scalars are skipped."""
         metrics = _metrics_for_task(
             "binary",
-            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31, "f1_micro": 0.90},
+            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31, "note": "n/a"},
         )
         assert metrics == {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31}
 
