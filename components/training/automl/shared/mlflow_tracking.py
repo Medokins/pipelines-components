@@ -39,12 +39,9 @@ OPTIONAL_METRIC_ARTIFACTS = (
     "back_testing.json",
 )
 
-# Redundant per-model metrics excluded from child-run logging. Everything else AutoGluon
-# computes is logged as-is; only these micro-averaged classification scores are dropped
-# because they collapse to plain accuracy for single-label problems and add noise without
-# information. Prefer extending this denylist over reintroducing an allowlist so new
-# metrics are logged by default rather than silently dropped.
-METRIC_EXCLUDE_KEYS: frozenset[str] = frozenset({"f1_micro", "precision_micro", "recall_micro"})
+# Redundant per-model metrics excluded from child-run logging.
+# Leaving it empty for now, can be used to reduced noise
+METRIC_EXCLUDE_KEYS: frozenset[str] = frozenset({})
 
 RUN_TYPE_PIPELINE = "pipeline"
 RUN_TYPE_MODEL = "model"
