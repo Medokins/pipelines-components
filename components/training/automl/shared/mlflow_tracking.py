@@ -39,13 +39,12 @@ OPTIONAL_METRIC_ARTIFACTS = (
     "back_testing.json",
 )
 
-# Metrics logged on child runs, keyed by AutoML task type.
-TASK_TYPE_METRIC_KEYS: dict[str, tuple[str, ...]] = {
-    "binary": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "roc_auc", "mcc", "log_loss"),
-    "multiclass": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "log_loss"),
-    "regression": ("r2", "root_mean_squared_error", "mean_squared_error", "mean_absolute_error"),
-    "time_series": ("MASE", "WQL", "sMAPE", "RMSE", "mean_wQuantileLoss"),
-}
+# Redundant per-model metrics excluded from child-run logging. Everything else AutoGluon
+# computes is logged as-is; only these micro-averaged classification scores are dropped
+# because they collapse to plain accuracy for single-label problems and add noise without
+# information. Prefer extending this denylist over reintroducing an allowlist so new
+# metrics are logged by default rather than silently dropped.
+METRIC_EXCLUDE_KEYS: frozenset[str] = frozenset({"f1_micro", "precision_micro", "recall_micro"})
 
 RUN_TYPE_PIPELINE = "pipeline"
 RUN_TYPE_MODEL = "model"
@@ -367,15 +366,15 @@ def _scalar_metrics(metrics: dict[str, Any]) -> dict[str, float]:
 
 
 def _metrics_for_task(task_type: str, metrics: dict[str, Any]) -> dict[str, float]:
-    """Select task-relevant scalar metrics for a model child run."""
+    """Select scalar metrics to log on a model child run.
+
+    Logs every finite scalar metric AutoGluon computed for the model, minus the redundant
+    variants in :data:`METRIC_EXCLUDE_KEYS`. ``task_type`` is retained for API stability and
+    to allow future per-task exclusions.
+    """
     normalized = _normalize_model_metrics(metrics)
     scalars = _scalar_metrics(normalized)
-    preferred_keys = TASK_TYPE_METRIC_KEYS.get(task_type)
-    if preferred_keys:
-        selected = {key: value for key, value in scalars.items() if key in preferred_keys}
-        if selected:
-            return selected
-    return scalars
+    return {key: value for key, value in scalars.items() if key not in METRIC_EXCLUDE_KEYS}
 
 
 def _stringify_params(params: dict[str, Any]) -> dict[str, str]:

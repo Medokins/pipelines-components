@@ -275,10 +275,10 @@ class TestMlflowTrackingHelpers:
         assert _normalize_model_metrics(payload) == {"accuracy": 0.91, "f1": 0.88}
 
     def test_metrics_for_task_binary(self):
-        """Log task-specific classification metrics (incl. log_loss) on child runs."""
+        """Log all computed scalar metrics (incl. log_loss); drop redundant micro variants."""
         metrics = _metrics_for_task(
             "binary",
-            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31, "fit_time": 12.0},
+            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31, "f1_micro": 0.90},
         )
         assert metrics == {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31}
 
