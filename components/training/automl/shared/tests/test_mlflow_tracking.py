@@ -275,12 +275,12 @@ class TestMlflowTrackingHelpers:
         assert _normalize_model_metrics(payload) == {"accuracy": 0.91, "f1": 0.88}
 
     def test_metrics_for_task_binary(self):
-        """Log task-specific classification metrics on child runs."""
+        """Log task-specific classification metrics (incl. log_loss) on child runs."""
         metrics = _metrics_for_task(
             "binary",
-            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "fit_time": 12.0},
+            {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31, "fit_time": 12.0},
         )
-        assert metrics == {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95}
+        assert metrics == {"accuracy": 0.91, "f1": 0.88, "roc_auc": 0.95, "log_loss": 0.31}
 
     def test_resolve_leaderboard_html_path_file(self, tmp_path):
         """Resolve a direct HTML file path."""

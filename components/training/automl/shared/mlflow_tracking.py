@@ -41,8 +41,8 @@ OPTIONAL_METRIC_ARTIFACTS = (
 
 # Metrics logged on child runs, keyed by AutoML task type.
 TASK_TYPE_METRIC_KEYS: dict[str, tuple[str, ...]] = {
-    "binary": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "roc_auc", "mcc"),
-    "multiclass": ("accuracy", "balanced_accuracy", "f1", "precision", "recall"),
+    "binary": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "roc_auc", "mcc", "log_loss"),
+    "multiclass": ("accuracy", "balanced_accuracy", "f1", "precision", "recall", "log_loss"),
     "regression": ("r2", "root_mean_squared_error", "mean_squared_error", "mean_absolute_error"),
     "time_series": ("MASE", "WQL", "sMAPE", "RMSE", "mean_wQuantileLoss"),
 }
