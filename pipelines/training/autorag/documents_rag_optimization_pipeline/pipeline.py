@@ -141,8 +141,9 @@ def documents_rag_optimization_pipeline(
         MAX_CPUS
     ).set_memory_limit(MAX_MEMORY)
 
-    # Consuming detected_ocr_lang also orders this task after search space preparation,
-    # so misconfigured models still fail before any heavy document processing starts.
+    # Consuming the detected language also orders this task after search space
+    # preparation, so misconfigured models still fail before any heavy document
+    # processing starts.
     text_extraction_task = text_extraction(
         documents_descriptor=documents_discovery_task.outputs["discovered_documents"],
         preset=preset,

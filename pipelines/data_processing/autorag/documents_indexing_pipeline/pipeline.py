@@ -61,11 +61,13 @@ def documents_indexing_pipeline(
         chunk_overlap: Token overlap between consecutive chunks (recursive method only).
         batch_size: Number of documents per batch. Defaults to ``20``; ``0`` processes all
             documents in a single batch.
-        ocr_lang: Language of the document text, used only to pick the RapidOCR model
-            bundle. Pass ``pattern.json`` ``settings.generation.language.code`` from the
-            optimization run so indexing OCRs the corpus the same way the experiment did.
-            Chinese selects the Chinese bundle; omitting it selects the English bundle,
-            which covers all Latin-script languages.
+        ocr_lang: Language used to pick the RapidOCR model bundle. Pass ``pattern.json``
+            ``settings.generation.language.code`` from the optimization run so indexing
+            OCRs the corpus the same way the experiment did. Note that AutoRAG derives
+            that code from the benchmark questions, not from the documents themselves,
+            so override it when the corpus is in a different language. Chinese selects
+            the Chinese bundle; omitting it selects the English bundle, which covers all
+            Latin-script languages.
     """
     documents_discovery_task = documents_discovery(
         input_data_bucket_name=input_data_bucket_name,

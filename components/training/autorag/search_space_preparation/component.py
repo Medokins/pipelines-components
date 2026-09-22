@@ -137,8 +137,7 @@ def search_space_preparation(
             # questions, so the values normally agree; pick the first and warn otherwise.
             detected_codes = []
             for model in search_space["foundation_model"].values:
-                language = getattr(model, "language", None)
-                code = getattr(language, "code", "") if language is not None else ""
+                code = getattr(getattr(model, "language", None), "code", "")
                 # Normalize before the emptiness check: a whitespace-only code is
                 # truthy but normalizes to "", which would sort ahead of a real
                 # code below and silently downgrade detection to English.
