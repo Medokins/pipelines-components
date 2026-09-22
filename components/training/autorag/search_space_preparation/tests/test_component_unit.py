@@ -273,10 +273,18 @@ class TestSearchSpacePreparationUnitTests:
         """The detected language is surfaced lowercased and stripped for text extraction."""
         assert self._run_and_get_detected_lang(tmp_path, _make_search_space(code)) == expected
 
-    @pytest.mark.parametrize("codes", [(), (None,), ("",)])
+    @pytest.mark.parametrize("codes", [(), (None,), ("",), ("   ",)])
     def test_missing_detection_returns_empty_string(self, tmp_path, codes):
         """No detected language yields an empty string, which text extraction reads as English."""
         assert self._run_and_get_detected_lang(tmp_path, _make_search_space(*codes)) == ""
+
+    def test_blank_code_does_not_override_a_real_detection(self, tmp_path, caplog):
+        """A whitespace-only code is discarded, not normalized into a winning empty string."""
+        with caplog.at_level("WARNING"):
+            detected = self._run_and_get_detected_lang(tmp_path, _make_search_space(" ", "zh"))
+
+        assert detected == "zh"
+        assert "disagree on the detected language" not in caplog.text
 
     def test_disagreeing_models_pick_one_and_warn(self, tmp_path, caplog):
         """Foundation models should agree; if they don't, pick deterministically and say so."""
