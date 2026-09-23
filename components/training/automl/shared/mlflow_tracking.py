@@ -688,10 +688,19 @@ class MlflowExperimentLogger:
         self._eval_metric = eval_metric
         self._log_model_artifacts = log_model_artifacts
         self.enabled = mlflow is not None and config is not None
+        # MLflow was injected by the platform (KFP_MLFLOW_CONFIG present). Distinct from
+        # ``enabled``, which also requires the mlflow package and an open parent run -- so
+        # callers can tell "tracking is off" apart from "tracking is on but broken".
+        self.configured = config is not None
         self.parent_run_id = ""
         self.experiment_id = config.experiment_id if config else ""
         self._child_run_ids: list[str] = []
         self._child_run_errors: list[str] = []
+        # Whether the parent-run writes actually reached MLflow; drives ``result()`` so a
+        # run whose every write was swallowed is not reported as successfully logged.
+        self._header_logged = False
+        self._finalize_logged = False
+        self._tracking_errors: list[str] = []
         # Populated live by the progress callback (model_name -> child run id) so the refit
         # loop enriches those runs instead of creating duplicate ones.
         self._live_child_runs: dict[str, str] = {}
@@ -753,7 +762,9 @@ class MlflowExperimentLogger:
             if data_config:
                 parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
             self._mlflow.log_params(_stringify_params(parent_params))
-        except Exception:
+            self._header_logged = True
+        except Exception as exc:
+            self.record_tracking_error(f"log_header: {exc}")
             logger.exception("MLflow parent header logging failed; continuing without it.")
 
     def build_progress_callback(self) -> Any | None:
@@ -963,13 +974,27 @@ class MlflowExperimentLogger:
                     ),
                 )
                 self._mlflow.log_param("best_model_name", best_model_name)
-        except Exception:
+            self._finalize_logged = True
+        except Exception as exc:
+            self.record_tracking_error(f"finalize: {exc}")
             logger.exception("MLflow finalize step failed; continuing.")
 
+    def record_tracking_error(self, reason: str) -> None:
+        """Record why MLflow tracking could not persist results (surfaced by ``result()``)."""
+        self._tracking_errors.append(reason)
+
     def result(self) -> tuple[bool, dict[str, str]]:
-        """Return ``(logged, tracking_info)`` for recording on the component status."""
-        if not self.enabled or self._config is None:
+        """Return ``(logged, tracking_info)`` for recording on the component status.
+
+        ``logged`` is True only when something actually reached MLflow -- the parent header,
+        the parent finalization, or at least one child run. Because every logging method
+        swallows its own exceptions, a configured-but-unreachable tracking server would
+        otherwise be reported as a successful log. When ``logged`` is False but tracking was
+        configured, ``tracking_info["mlflow_tracking_error"]`` carries the reason.
+        """
+        if self._config is None:
             return False, {}
+        persisted = bool(self._header_logged or self._finalize_logged or self._child_run_ids)
         run_id_for_url = self.parent_run_id or self._config.run_id
         tracking_info: dict[str, str] = {
             "mlflow_run_id": run_id_for_url,
@@ -983,7 +1008,10 @@ class MlflowExperimentLogger:
             tracking_info["mlflow_run_url"] = run_url
         if self._child_run_errors:
             tracking_info["mlflow_child_run_errors"] = json.dumps(self._child_run_errors)
-        return True, tracking_info
+        if not persisted:
+            reasons = self._tracking_errors + self._child_run_errors
+            tracking_info["mlflow_tracking_error"] = "; ".join(reasons) or "no MLflow write succeeded"
+        return persisted, tracking_info
 
 
 @contextmanager
@@ -1019,15 +1047,19 @@ def experiment_run_logger(
         log_model_artifacts=log_model_artifacts,
     )
     if not run_logger.enabled:
+        if config is not None:
+            # Configured but unusable -- report it as failed tracking, not as tracking off.
+            run_logger.record_tracking_error("mlflow package is not installed in the runtime image")
         yield run_logger
         return
 
     parent_cm = parent_mlflow_run(mlflow_mod, config, fallback_name=run_name)
     try:
         parent_cm.__enter__()
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to open MLflow parent run; disabling tracking for this step.")
         run_logger.enabled = False
+        run_logger.record_tracking_error(f"parent run could not be opened: {exc}")
         yield run_logger
         return
 

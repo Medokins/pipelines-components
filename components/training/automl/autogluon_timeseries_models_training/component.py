@@ -790,6 +790,21 @@ def autogluon_timeseries_models_training(
                     "completed",
                     message={"level": "info", "text": "Logged run results to MLflow."},
                 )
+            elif run_logger.configured:
+                # MLflow was injected but every write was swallowed (server unreachable, auth
+                # rejected, ...). Report the failure instead of claiming success; the stage
+                # still completes because tracking is best-effort and training itself is fine.
+                for key, value in mlflow_tracking_info.items():
+                    component_status.metadata[key] = value
+                reason = mlflow_tracking_info.get("mlflow_tracking_error", "no MLflow write succeeded")
+                status.record(
+                    "log_mlflow_results",
+                    "completed",
+                    message={
+                        "level": "warning",
+                        "text": f"MLflow tracking is configured but no results were logged: {reason}",
+                    },
+                )
             else:
                 # No MLflow config injected (KFP_MLFLOW_CONFIG absent): tracking is disabled.
                 # The stage still completes so the component reports done; the message records

@@ -698,7 +698,75 @@ class TestMlflowExperimentLogger:
         )
 
         assert logged is False
-        assert tracking_info == {}
+        # Configured but broken: the reason is surfaced instead of an empty (silently
+        # successful-looking) result.
+        assert "parent run could not be opened" in tracking_info["mlflow_tracking_error"]
+
+
+class TestTrackingFailureReporting:
+    """``result()`` reports failure when MLflow was configured but nothing was persisted."""
+
+    def test_reports_not_logged_when_every_write_fails(self, tmp_path, monkeypatch):
+        """All parent/child writes swallowed -> logged is False with a reason, not a false success."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
+
+        # The parent run opens, but every write to the tracking server is rejected.
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [_mock_run_context("child-1", "1")])
+        mock_mlflow.set_tags.side_effect = RuntimeError("tracking server unreachable")
+        mock_mlflow.log_params.side_effect = RuntimeError("tracking server unreachable")
+        mock_mlflow.log_metric.side_effect = RuntimeError("tracking server unreachable")
+        mock_mlflow.log_metrics.side_effect = RuntimeError("tracking server unreachable")
+
+        logged, tracking_info = _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.91}},
+        )
+
+        assert logged is False
+        assert "tracking server unreachable" in tracking_info["mlflow_tracking_error"]
+
+    def test_reports_logged_when_only_child_runs_fail(self, tmp_path, monkeypatch):
+        """A healthy parent run still counts as logged even if a child run failed."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
+
+        mock_mlflow = _make_mock_mlflow(_mock_run_context("parent-run", "1"), [])
+        # Only the child run fails to open (both the nested call and the client fallback);
+        # the parent header and finalize still write.
+        mock_mlflow.start_run.side_effect = [_mock_run_context("parent-run", "1"), RuntimeError("nested run rejected")]
+        mock_mlflow.MlflowClient.side_effect = RuntimeError("child run rejected")
+
+        logged, tracking_info = _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.91}},
+        )
+
+        assert logged is True
+        assert "mlflow_tracking_error" not in tracking_info
+        assert model_name in tracking_info["mlflow_child_run_errors"]
+
+    def test_configured_flag_separates_disabled_from_broken(self, monkeypatch):
+        """``configured`` is False only when the platform injected no MLflow config."""
+        monkeypatch.delenv("KFP_MLFLOW_CONFIG", raising=False)
+        with experiment_run_logger(task_type="binary", eval_metric="accuracy") as run_logger:
+            assert run_logger.configured is False
+
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+        mock_mlflow = mock.MagicMock()
+        mock_mlflow.start_run.side_effect = RuntimeError("boom")
+        with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
+            with experiment_run_logger(task_type="binary", eval_metric="accuracy") as run_logger:
+                assert run_logger.enabled is False
+                assert run_logger.configured is True
 
 
 class TestParentRunAdrFields:
