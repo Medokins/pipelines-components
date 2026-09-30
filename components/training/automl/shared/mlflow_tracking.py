@@ -457,6 +457,31 @@ def _parse_timeout_seconds(timeout: str) -> int | None:
     return seconds if seconds > 0 else None
 
 
+def _is_kfp_infrastructure_run(run_name: str) -> bool:
+    """Detect if a child run name matches a KFP infrastructure pattern (not a model trial).
+
+    Returns True for condition branches, data loaders, and stage-map publishers that add
+    no model metrics; False for model trial runs (e.g., 'LightGBM_BAG_L1', 'ExtraTreesEntr_BAG_L2').
+    """
+    if not run_name:
+        return False
+    name = run_name.lower().strip()
+    # KFP condition branches created by dsl.If nodes
+    if name.startswith("condition-") or name.startswith("condition_"):
+        return True
+    # Data loading and preprocessing steps
+    if "data" in name and "loader" in name:
+        return True
+    if "data-loader" in name or "data_loader" in name:
+        return True
+    # Stage map publication (component-stage-map, publish-component-stage-map)
+    if "stage-map" in name or "stage_map" in name:
+        return True
+    if "publish" in name and "stage" in name:
+        return True
+    return False
+
+
 def _safe_log_artifact(mlflow: Any, file_path: Path, artifact_path: str) -> bool:
     """Upload a local file to MLflow, logging and continuing on failure."""
     if not file_path.is_file():
@@ -716,6 +741,7 @@ class MlflowExperimentLogger:
         top_n: int = 0,
         data_config: dict[str, Any] | None = None,
         dataset_uri: str = "",
+        test_dataset_uri: str = "",
     ) -> None:
         """Tag the parent run and log run-level params. Call once before ``log_model``."""
         if not self.enabled:
@@ -731,17 +757,29 @@ class MlflowExperimentLogger:
             kfp_version = _resolve_kfp_version()
             image = _resolve_image()
 
-            self._mlflow.set_tags(
-                {
-                    "pipeline_name": pipeline_name,
-                    "kfp_run_id": kfp_run_id,
-                    "kfp_run_name": kfp_run_name,
-                    "autogluon_version": autogluon_version,
-                    "kfp_version": kfp_version,
-                    "image": image,
-                    "run_type": RUN_TYPE_PIPELINE,
-                }
-            )
+            # Prepare tags: de-duplicate with platform-set tags by checking if kfp.pipeline_*
+            # keys already exist (set by the KFP MLflow integration). If they do, skip the
+            # AutoML kfp_* variants to avoid redundant tagging of the same identity.
+            parent_tags = (active.data.tags if active else {}) or {}
+            tags_to_set: dict[str, str] = {
+                "pipeline_name": pipeline_name,
+                "autogluon_version": autogluon_version,
+                "kfp_version": kfp_version,
+                "image": image,
+                "run_type": RUN_TYPE_PIPELINE,
+            }
+            # Only set kfp_* variants if the platform hasn't already set kfp.pipeline_*
+            # (indicating the parent run was opened by the platform MLflow integration).
+            if "kfp.pipeline_run_id" not in parent_tags:
+                tags_to_set["kfp_run_id"] = kfp_run_id
+                if kfp_run_name:
+                    tags_to_set["kfp_run_name"] = kfp_run_name
+            else:
+                logger.info(
+                    "Platform-set kfp.pipeline_run_id found on parent run; skipping AutoML kfp_* "
+                    "tag variants to avoid duplication."
+                )
+            self._mlflow.set_tags(tags_to_set)
             # task_type is a run parameter (per the MLflow integration ADR), not a tag.
             parent_params: dict[str, Any] = {
                 "task_type": self._task_type,
@@ -757,6 +795,9 @@ class MlflowExperimentLogger:
             if dataset_uri:
                 # Non-secret dataset identity (s3://bucket/key); credentials live in the K8s secret.
                 parent_params["dataset_uri"] = dataset_uri
+            if test_dataset_uri:
+                # Non-secret test dataset identity (s3://bucket/key); credentials live in the K8s secret.
+                parent_params["test_dataset_uri"] = test_dataset_uri
             if data_config:
                 parent_params["data_config"] = json.dumps(data_config, sort_keys=True)
             self._mlflow.log_params(_stringify_params(parent_params))
@@ -817,6 +858,47 @@ class MlflowExperimentLogger:
                     run_id,
                     exc_info=True,
                 )
+
+    def cleanup_kfp_infrastructure_runs(self) -> None:
+        """Delete KFP infrastructure child runs (conditions, loaders) created by platform integration.
+
+        The RHOAI MLflow integration automatically creates a nested child run for every KFP
+        task in the DAG, including dsl.If condition branches and non-training steps. These
+        infrastructure runs have no model metrics and clutter the MLflow UI. This method
+        deletes them to leave only model trial runs visible. Best-effort: failures are logged.
+        """
+        if not self.enabled or not self.parent_run_id:
+            return
+        try:
+            client = self._mlflow.MlflowClient()
+        except Exception:
+            logger.warning("Could not open MLflow client to cleanup KFP infrastructure runs.", exc_info=True)
+            return
+
+        try:
+            parent_run_data = client.get_run(self.parent_run_id)
+        except Exception:
+            logger.warning("Could not fetch parent run %s to cleanup children.", self.parent_run_id, exc_info=True)
+            return
+
+        deleted_count = 0
+        for child_run_info in parent_run_data.data.child_runs or []:
+            child_run_id = child_run_info.run_id
+            child_run_name = child_run_info.run_name or ""
+            if _is_kfp_infrastructure_run(child_run_name):
+                try:
+                    client.delete_run(child_run_id)
+                    deleted_count += 1
+                    logger.info("Deleted KFP infrastructure child run %s (%s).", child_run_name, child_run_id)
+                except Exception:
+                    logger.warning(
+                        "Could not delete KFP infrastructure child run %s (%s); leaving it in place.",
+                        child_run_name,
+                        child_run_id,
+                        exc_info=True,
+                    )
+        if deleted_count > 0:
+            logger.info("Cleaned up %d KFP infrastructure child runs from parent %s.", deleted_count, self.parent_run_id)
 
     def log_model(
         self,
@@ -921,9 +1003,16 @@ class MlflowExperimentLogger:
         model_names: list[str],
         total_fit_time_seconds: float | None = None,
     ) -> None:
-        """Log parent aggregates and the leaderboard."""
+        """Log parent aggregates and the leaderboard, then clean up KFP infrastructure child runs."""
         if not self.enabled:
             return
+        # Remove KFP infrastructure runs (conditions, loaders, stage-map publishers) before
+        # finalizing so the leaderboard only shows model trial runs. Do this first so any
+        # cleanup errors don't block the parent finalization.
+        try:
+            self.cleanup_kfp_infrastructure_runs()
+        except Exception:
+            logger.exception("KFP infrastructure cleanup failed; continuing with parent finalization.")
         try:
             tmp_dir = self._tmp_dir or Path(tempfile.mkdtemp(prefix="automl-mlflow-"))
             if total_fit_time_seconds is not None:

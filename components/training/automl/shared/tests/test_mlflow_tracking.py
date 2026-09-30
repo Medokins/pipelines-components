@@ -836,3 +836,139 @@ class TestParentRunAdrFields:
         )
         logged_metric_names = [c.args[0] for c in mock_mlflow.log_metric.call_args_list]
         assert "total_fit_time_seconds" not in logged_metric_names
+
+    def test_skips_duplicate_kfp_tags_when_platform_set(self, tmp_path, monkeypatch):
+        """Skip AutoML kfp_* tags when the parent run already has platform kfp.pipeline_* tags."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
+
+        # Mock a parent run that already has platform-set kfp.* tags.
+        parent_ctx = _mock_run_context("parent-run", "1")
+        parent_ctx.data.tags = {
+            "kfp.pipeline_run_id": "parent-run",
+            "kfp.pipeline_id": "pipeline-123",
+            "kfp.pipeline_version_id": "version-456",
+        }
+        mock_mlflow = _make_mock_mlflow(parent_ctx, [_mock_run_context("child-run-1", "1")])
+
+        logged, tracking_info = _run_logger_lifecycle(
+            mock_mlflow,
+            tmp_path=tmp_path,
+            model_names=[model_name],
+            metrics_by_model={model_name: {"accuracy": 0.91}},
+        )
+
+        assert logged is True
+        # Verify log_header was called; extract the tags it set
+        header_call = [c for c in mock_mlflow.set_tags.call_args_list if c.args][0]
+        tags_set = header_call.args[0]
+        # Should NOT set kfp_run_id since kfp.pipeline_run_id is already on the parent
+        assert "kfp_run_id" not in tags_set
+        assert "kfp_run_name" not in tags_set
+        # Should still set other tags
+        assert "pipeline_name" in tags_set
+        assert "autogluon_version" in tags_set
+
+    def test_cleanup_kfp_infrastructure_runs_deletes_matching_children(self, tmp_path, monkeypatch):
+        """cleanup_kfp_infrastructure_runs deletes condition/loader/stage-map children."""
+        _set_kfp_mlflow_config(monkeypatch, parent_run_id="parent-run", experiment_id="1")
+
+        model_name = "LightGBM_BAG_L1_FULL"
+        _write_model_metrics(tmp_path, model_name, {"accuracy": 0.91})
+        html_path = tmp_path / "leaderboard.html"
+        html_path.write_text("<html></html>", encoding="utf-8")
+
+        parent_ctx = _mock_run_context("parent-run", "1")
+
+        # Mock child runs that match KFP infrastructure patterns
+        def _mock_child(run_id: str, name: str):
+            child = mock.MagicMock()
+            child.run_id = run_id
+            child.run_name = name
+            return child
+
+        # Mix real model runs with infrastructure noise
+        parent_ctx.data.child_runs = [
+            _mock_child("child-model-1", "LightGBM_BAG_L1"),
+            _mock_child("child-cond-1", "condition-1"),
+            _mock_child("child-cond-2", "condition-branches-1"),
+            _mock_child("child-loader", "automl-data-loader"),
+            _mock_child("child-model-2", "ExtraTreesEntr_BAG_L2"),
+            _mock_child("child-stage", "publish-component-stage-map"),
+        ]
+
+        mock_mlflow = _make_mock_mlflow(parent_ctx, [_mock_run_context("child-run-1", "1")])
+        mock_client = mock.MagicMock()
+        mock_mlflow.MlflowClient.return_value = mock_client
+        mock_client.get_run.return_value = parent_ctx
+
+        with mock.patch.dict(sys.modules, {"mlflow": mock_mlflow}):
+            with experiment_run_logger(
+                task_type="binary", eval_metric="accuracy", log_model_artifacts=False
+            ) as run_logger:
+                run_logger.log_header(pipeline_name="p", kfp_run_id="run-1", top_n=1)
+                run_logger.log_model(
+                    model_name=model_name,
+                    model_dir=tmp_path / model_name,
+                    model_uri=f"s3://bucket/models/{model_name}",
+                    metrics={"test_data": {"accuracy": 0.91}},
+                )
+                run_logger.finalize(html_artifact_path=html_path, model_names=[model_name])
+
+        # Verify cleanup deleted only the infrastructure runs
+        deleted_ids = {c.args[0] for c in mock_client.delete_run.call_args_list}
+        assert deleted_ids == {"child-cond-1", "child-cond-2", "child-loader", "child-stage"}
+        # Model runs should NOT have been deleted
+        assert "child-model-1" not in deleted_ids
+        assert "child-model-2" not in deleted_ids
+
+
+class TestKfpInfrastructureDetection:
+    """Tests for _is_kfp_infrastructure_run pattern matching."""
+
+    def test_matches_condition_branches(self):
+        """Detect dsl.If condition branch patterns."""
+        from kfp_components.components.training.automl.shared.mlflow_tracking import _is_kfp_infrastructure_run
+
+        assert _is_kfp_infrastructure_run("condition-1") is True
+        assert _is_kfp_infrastructure_run("condition-2") is True
+        assert _is_kfp_infrastructure_run("condition-branches-1") is True
+        assert _is_kfp_infrastructure_run("Condition-1") is True
+        assert _is_kfp_infrastructure_run("condition_1") is True
+
+    def test_matches_data_loaders(self):
+        """Detect data loader and preprocessing step patterns."""
+        from kfp_components.components.training.automl.shared.mlflow_tracking import _is_kfp_infrastructure_run
+
+        assert _is_kfp_infrastructure_run("automl-data-loader") is True
+        assert _is_kfp_infrastructure_run("automl_data_loader") is True
+        assert _is_kfp_infrastructure_run("data-loader") is True
+        assert _is_kfp_infrastructure_run("Automl-Data-Loader") is True
+
+    def test_matches_stage_maps(self):
+        """Detect component-stage-map and publish patterns."""
+        from kfp_components.components.training.automl.shared.mlflow_tracking import _is_kfp_infrastructure_run
+
+        assert _is_kfp_infrastructure_run("publish-component-stage-map") is True
+        assert _is_kfp_infrastructure_run("component-stage-map") is True
+        assert _is_kfp_infrastructure_run("component_stage_map") is True
+        assert _is_kfp_infrastructure_run("Publish-Component-Stage-Map") is True
+
+    def test_does_not_match_model_runs(self):
+        """Model trial run names should not be detected as infrastructure."""
+        from kfp_components.components.training.automl.shared.mlflow_tracking import _is_kfp_infrastructure_run
+
+        assert _is_kfp_infrastructure_run("LightGBM_BAG_L1") is False
+        assert _is_kfp_infrastructure_run("ExtraTreesEntr_BAG_L2") is False
+        assert _is_kfp_infrastructure_run("RandomForestGini_BAG_L1") is False
+        assert _is_kfp_infrastructure_run("WeightedEnsemble_L2") is False
+        assert _is_kfp_infrastructure_run("autogluon-models-training") is False
+
+    def test_empty_string_is_not_infrastructure(self):
+        """Empty or None run names are not infrastructure patterns."""
+        from kfp_components.components.training.automl.shared.mlflow_tracking import _is_kfp_infrastructure_run
+
+        assert _is_kfp_infrastructure_run("") is False
+        assert _is_kfp_infrastructure_run("   ") is False
