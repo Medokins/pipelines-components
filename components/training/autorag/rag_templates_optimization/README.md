@@ -27,6 +27,10 @@ Runs search-space construction, evaluator setup, and the optimization experiment
 | `input_data_keys` | `Optional[list[str]]` | `None` | Paths to documents dirs within bucket. Only the first entry is used for the generated indexing notebook; the full list is propagated to the indexing pipeline blueprint. |
 | `component_status` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing stage-level progress tracking. |
 | `preset` | `str` | `speed` | Pipeline quality tier. "speed" (default) uses 10 benchmark query threads. "balanced" uses 4 threads (reduced due to larger per-request context). |
+| `pipeline_name` | `str` | `""` | Pipeline identifier, logged to MLflow as a param and tag. |
+| `run_id` | `str` | `""` | KFP run ID (``dsl.PIPELINE_JOB_ID_PLACEHOLDER``), logged to MLflow. |
+| `run_name` | `str` | `""` | KFP run name (``dsl.PIPELINE_JOB_NAME_PLACEHOLDER``). Logged to MLflow, and used to name the fallback experiment/run when the platform supplies no parent run. |
+| `log_evaluation_artifacts` | `bool` | `False` | Upload each pattern's per-question evaluation records to its MLflow child run. Off by default: those records contain verbatim questions, generated answers, and retrieved chunk text from the source documents, which may be sensitive. Aggregate scores are always logged as metrics regardless of this flag. |
 
 ## Usage Examples 🧪
 

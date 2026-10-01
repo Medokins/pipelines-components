@@ -55,6 +55,7 @@ def documents_rag_optimization_pipeline(
     optimization_metric: str = "overall_score",
     optimization_max_rag_patterns: int = 8,
     preset: str = "speed",
+    log_evaluation_artifacts: bool = False,
 ):
     """Automated system for building and optimizing Retrieval-Augmented Generation (RAG) applications.
 
@@ -106,6 +107,22 @@ def documents_rag_optimization_pipeline(
             no table structure parsing, and no contextual enrichment. "balanced"
             enables Docling table layout parsing, hybrid chunking, and LLM
             contextual enrichment. Both presets use the same resource tier.
+        log_evaluation_artifacts: Upload each RAG pattern's per-question evaluation
+            records to its MLflow child run. Off by default: those records contain
+            verbatim questions, generated answers, and retrieved chunk text from your
+            source documents, which may be sensitive. Aggregate scores are always
+            logged as metrics regardless of this flag. Has no effect when MLflow
+            tracking is not enabled on the cluster.
+
+    MLflow logging:
+        Runs are tracked in MLflow automatically when the cluster's MLflow integration
+        is enabled; there is no parameter to turn it on. The platform injects the
+        tracking endpoint, workspace, experiment, and parent run into every step, and
+        authentication uses the pod's ServiceAccount token, so no connection secret is
+        needed. Optimization parameters and results land on the pipeline's parent run,
+        and each discovered RAG pattern gets a nested child run written *as the
+        optimizer evaluates it*, so the experiment fills in live during the run. When
+        MLflow is not enabled, the pipeline behaves exactly as before.
     """
     component_stage_map_task = publish_component_stage_map(
         pipeline_id=PIPELINE_NAME,
@@ -182,6 +199,10 @@ def documents_rag_optimization_pipeline(
         test_data_key=test_data_key,
         input_data_keys=input_data_keys,
         preset=preset,
+        pipeline_name=PIPELINE_NAME,
+        run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+        run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+        log_evaluation_artifacts=log_evaluation_artifacts,
     )
 
     rag_optimization_task.set_caching_options(False)

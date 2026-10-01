@@ -8,6 +8,7 @@ real (heavy) library or any network access.
 import inspect
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,12 @@ from typing import Literal
 from unittest import mock
 
 import pytest
+from kfp_components.components.training.autorag.pytest_support import (
+    FakeMlflow,
+)
+from kfp_components.components.training.autorag.pytest_support import (
+    mlflow_pattern_payload as _mlflow_pattern_payload,
+)
 
 from ..component import rag_templates_optimization
 
@@ -607,3 +614,136 @@ class TestRagTemplatesOptimizationRun:
                     input_data_bucket_name="bucket",
                     leaderboard=leaderboard_html,
                 )
+
+
+class TestRagTemplatesOptimizationMlflow:
+    """MLflow tracking wiring: opt-in via the platform, never fatal, logged live."""
+
+    @staticmethod
+    def _run(tmp_path, mocks, **overrides):
+        """Invoke the component with the standard fixture arguments."""
+        rag_patterns, leaderboard_html = _artifacts(tmp_path)
+        kwargs = {
+            "extracted_text": str(tmp_path / "extracted"),
+            "test_data": str(tmp_path / "test_data.json"),
+            "search_space_mps_report": _write_search_space_report(tmp_path),
+            "rag_patterns": rag_patterns,
+            "test_data_key": "data/test.json",
+            "maas_secret_name": "maas-connection",
+            "vector_db_secret_name": "vector-db-connection",
+            "input_data_secret_name": "s3-input-connection",
+            "input_data_bucket_name": "customer-docs",
+            "leaderboard": leaderboard_html,
+        }
+        kwargs.update(overrides)
+        with mock.patch.dict("sys.modules", mocks.modules):
+            rag_templates_optimization.python_func(**kwargs)
+        return rag_patterns, leaderboard_html
+
+    def test_accepts_mlflow_parameters(self):
+        """The component exposes the KFP placeholders MLflow logging needs."""
+        params = inspect.signature(rag_templates_optimization.python_func).parameters
+        assert {"pipeline_name", "run_id", "run_name", "log_evaluation_artifacts"} <= set(params)
+        assert params["log_evaluation_artifacts"].default is False
+
+    @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
+    def test_runs_unchanged_when_tracking_is_not_configured(self, tmp_path):
+        """Without KFP_MLFLOW_CONFIG the component behaves exactly as before."""
+        mocks = _make_ai4rag_mocks()
+        mocks.KFPEventHandler.return_value.patterns = [
+            {"payload": _pattern_payload("pattern_a"), "evaluation_results": []},
+        ]
+        rag_patterns, _ = self._run(tmp_path, mocks, pipeline_name="p", run_id="r", run_name="n")
+
+        mocks.AI4RAGExperiment.return_value.search.assert_called_once()
+        assert (Path(rag_patterns.path) / "pattern_a" / "pattern.json").exists()
+        assert "mlflow_run_id" not in rag_patterns.metadata
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            **MOCKED_ENV_VARIABLES,
+            "KFP_MLFLOW_CONFIG": json.dumps(
+                {
+                    "endpoint": "https://mlflow.example.com",
+                    "experimentId": "7",
+                    "parentRunId": "parent-run-1",
+                    "authType": "none",
+                }
+            ),
+        },
+        clear=True,
+    )
+    def test_logs_patterns_live_during_search(self, tmp_path, monkeypatch):
+        """Patterns reach MLflow through the callback while search() is still running."""
+        fake_mlflow = FakeMlflow()
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+
+        mocks = _make_ai4rag_mocks()
+        mocks.KFPEventHandler.return_value.patterns = [
+            {"payload": _pattern_payload("pattern_a"), "evaluation_results": []},
+        ]
+
+        # Drive the ai4rag callback from search() so the live path is exercised, and
+        # assert the child run exists *before* search() returns.
+        observed_during_search = {}
+
+        def fake_search():
+            handler = mocks.AI4RAGExperiment.call_args.kwargs["event_handler"]
+            handler.on_pattern_creation(
+                payload=_mlflow_pattern_payload(name="pattern_a"),
+                evaluation_results=[{"question": "q", "answer": "a"}],
+            )
+            observed_during_search["children"] = len(fake_mlflow.child_runs())
+
+        mocks.AI4RAGExperiment.return_value.search.side_effect = fake_search
+        rag_patterns, _ = self._run(
+            tmp_path,
+            mocks,
+            pipeline_name="documents-rag-optimization-pipeline",
+            run_id="kfp-run-1",
+            run_name="job-x",
+        )
+
+        assert observed_during_search["children"] == 1
+        child = fake_mlflow.child_runs()[0]
+        assert child["metrics"]["custom_overall_score"] == 0.77
+        assert child["params"]["chunking.method"] == "recursive"
+        # Evaluation records hold verbatim source text; excluded unless opted in.
+        assert {name for _, name in child["artifacts"]} == {"pattern.json", "generation_prompts.json"}
+
+        parent = fake_mlflow.runs["parent-run-1"]
+        assert parent["params"]["pipeline_name"] == "documents-rag-optimization-pipeline"
+        assert parent["params"]["kfp_run_id"] == "kfp-run-1"
+        assert parent["params"]["optimization_metric"] == "custom:overall_score"
+        assert parent["metrics"]["best_pattern_score"] == 0.77
+        assert ("leaderboard", "leaderboard.html") in parent["artifacts"]
+
+        assert rag_patterns.metadata["mlflow_run_id"] == "parent-run-1"
+        assert rag_patterns.metadata["mlflow_child_run_count"] == "1"
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            **MOCKED_ENV_VARIABLES,
+            "KFP_MLFLOW_CONFIG": json.dumps(
+                {"endpoint": "https://mlflow.example.com", "experimentId": "7", "authType": "none"}
+            ),
+        },
+        clear=True,
+    )
+    def test_tracking_failure_does_not_fail_optimization(self, tmp_path, monkeypatch):
+        """An unreachable MLflow server leaves the optimization outputs intact."""
+        broken = mock.MagicMock()
+        broken.set_tracking_uri.side_effect = RuntimeError("unreachable")
+        monkeypatch.setitem(sys.modules, "mlflow", broken)
+
+        mocks = _make_ai4rag_mocks()
+        mocks.KFPEventHandler.return_value.patterns = [
+            {"payload": _pattern_payload("pattern_a"), "evaluation_results": []},
+        ]
+        rag_patterns, leaderboard_html = self._run(tmp_path, mocks)
+
+        assert (Path(rag_patterns.path) / "pattern_a" / "pattern.json").exists()
+        assert Path(leaderboard_html.path).read_text(encoding="utf-8") == "<html></html>"
+        assert "unreachable" in rag_patterns.metadata["mlflow_tracking_error"]

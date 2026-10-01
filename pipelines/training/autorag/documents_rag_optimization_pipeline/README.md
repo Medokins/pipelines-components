@@ -29,6 +29,7 @@ deployment settings), executable notebooks, and evaluation results.
 | `optimization_metric` | `str` | `overall_score` | Quality metric used to rank RAG patterns. Use an evaluator-qualified value such as ``"unitxt:faithfulness"``, ``"ragas:context_precision"``, or ``"custom:overall_score"`` (default). The ``speed`` preset supports Unitxt and custom metrics; ``balanced`` also supports RAGAS metrics. ``custom:overall_score`` aggregates Unitxt outputs for ``speed`` and Unitxt plus RAGAS outputs for ``balanced``. |
 | `optimization_max_rag_patterns` | `int` | `8` | Maximum number of RAG patterns to generate. Passed to ai4rag (max_number_of_rag_patterns). Defaults to 8. |
 | `preset` | `str` | `speed` | Pipeline quality tier. "speed" (default) uses recursive chunking, no table structure parsing, and no contextual enrichment. "balanced" enables Docling table layout parsing, hybrid chunking, and LLM contextual enrichment. Both presets use the same resource tier. |
+| `log_evaluation_artifacts` | `bool` | `False` | Upload each RAG pattern's per-question evaluation records to its MLflow child run. Off by default: those records contain verbatim questions, generated answers, and retrieved chunk text from your source documents, which may be sensitive. Aggregate scores are always logged as metrics regardless of this flag. Has no effect when MLflow tracking is not enabled on the cluster. |
 
 ## Metadata 🗂️
 

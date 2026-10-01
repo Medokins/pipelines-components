@@ -128,3 +128,30 @@ class TestDocumentsRagOptimizationPipelineUnit:
             AUTORAG_OPTIMIZATION_EXECUTOR_RESOURCES,
             pipeline_name="documents_rag_optimization_pipeline",
         )
+
+
+class TestDocumentsRagOptimizationPipelineMlflow:
+    """MLflow tracking wiring at the pipeline level."""
+
+    def test_exposes_evaluation_artifact_opt_in(self):
+        """Uploading per-question evaluation records is opt-in, since they may be sensitive."""
+        inputs = getattr(documents_rag_optimization_pipeline, "_component_inputs", set())
+        assert "log_evaluation_artifacts" in inputs
+
+    def test_optimization_receives_run_identity_placeholders(self):
+        """The optimization step gets the KFP run identity MLflow logging records."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            compiler.Compiler().compile(
+                pipeline_func=documents_rag_optimization_pipeline,
+                package_path=tmp_path,
+            )
+            spec = load_pipeline_spec_document(Path(tmp_path))
+            params = spec["root"]["dag"]["tasks"]["rag-templates-optimization"]["inputs"]["parameters"]
+            assert params["pipeline_name"]["runtimeValue"]["constant"] == "documents-rag-optimization-pipeline"
+            assert params["run_id"]["runtimeValue"]["constant"] == "{{$.pipeline_job_uuid}}"
+            assert params["run_name"]["runtimeValue"]["constant"] == "{{$.pipeline_job_name}}"
+            assert params["log_evaluation_artifacts"]["componentInputParameter"] == "log_evaluation_artifacts"
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
